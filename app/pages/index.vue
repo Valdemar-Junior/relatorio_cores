@@ -21,6 +21,7 @@ const supabase = useSupabaseClient()
 
 const competenciaInput = ref(getCurrentCompetenciaInput())
 const busca = ref('')
+const historicosSelecionados = ref<string[]>([])
 const titulos = ref<TituloListItem[]>([])
 const carregando = ref(false)
 const importando = ref(false)
@@ -29,21 +30,58 @@ const erro = ref('')
 const sucesso = ref('')
 const migrationAviso = ref('')
 const ultimaImportacao = ref<string | null>(null)
+const filtroHistoricosAberto = ref(false)
+const buscaHistorico = ref('')
 
 const competenciaFormatada = computed(() => competenciaFromInput(competenciaInput.value))
+
+const historicosDisponiveis = computed(() => {
+  const unicos = [...new Set(
+    titulos.value
+      .map((titulo) => normalizeText(titulo.historico))
+      .filter((historico) => historico !== '-')
+  )]
+
+  return unicos.sort((a, b) => {
+    const prioridadeA = getHistoricoPrioridade(a)
+    const prioridadeB = getHistoricoPrioridade(b)
+
+    if (prioridadeA !== prioridadeB) {
+      return prioridadeA - prioridadeB
+    }
+
+    return a.localeCompare(b, 'pt-BR')
+  })
+})
+
+const historicosFiltrados = computed(() => {
+  const termo = sanitizeSearch(buscaHistorico.value)
+
+  if (!termo) {
+    return historicosDisponiveis.value
+  }
+
+  return historicosDisponiveis.value.filter((historico) => sanitizeSearch(historico).includes(termo))
+})
 
 const titulosFiltrados = computed(() => {
   const termo = sanitizeSearch(busca.value)
 
+  const base = historicosSelecionados.value.length
+    ? titulos.value.filter((titulo) => historicosSelecionados.value.includes(normalizeText(titulo.historico)))
+    : titulos.value
+
   if (!termo) {
-    return titulos.value
+    return base
   }
 
-  return titulos.value.filter((titulo) => {
+  return base.filter((titulo) => {
     const categoria = titulo.categoriaCodigo ? RATEIO_CATEGORIAS_MAP[titulo.categoriaCodigo] : ''
     const textoBase = [
       titulo.fornecedor,
       titulo.historico,
+      titulo.observacao,
+      titulo.complemento,
       titulo.numero_titulo,
       titulo.sufixo,
       categoria
@@ -62,7 +100,7 @@ const valorTotalPago = computed(() => titulos.value.reduce((total, titulo) => to
 
 const gruposRelatorio = computed(() =>
   RATEIO_CATEGORIAS.map((categoria) => {
-    const itens = titulos.value.filter((titulo) => titulo.categoriaCodigo === categoria.codigo)
+    const itens = titulosFiltrados.value.filter((titulo) => titulo.categoriaCodigo === categoria.codigo)
     const total = itens.reduce((accumulator, item) => accumulator + Number(item.valor_pago ?? 0), 0)
 
     return {
@@ -94,6 +132,40 @@ function resetMensagens() {
   sucesso.value = ''
 }
 
+function getHistoricoPrioridade(historico: string) {
+  const normalizado = sanitizeSearch(historico)
+
+  if (
+    normalizado === 'pagamento fornecedor' ||
+    normalizado === 'pagamento de fornecedor'
+  ) {
+    return 0
+  }
+
+  if (normalizado.includes('frete')) {
+    return 1
+  }
+
+  return 2
+}
+
+function alternarHistorico(historico: string) {
+  if (historicosSelecionados.value.includes(historico)) {
+    historicosSelecionados.value = historicosSelecionados.value.filter((item) => item !== historico)
+    return
+  }
+
+  historicosSelecionados.value = [...historicosSelecionados.value, historico]
+}
+
+function limparFiltroHistorico() {
+  historicosSelecionados.value = []
+}
+
+function selecionarTodosHistoricos() {
+  historicosSelecionados.value = [...historicosFiltrados.value]
+}
+
 async function carregarTitulos(exibirLoading = true) {
   if (!competenciaFormatada.value) {
     erro.value = 'Selecione uma competencia valida.'
@@ -113,7 +185,7 @@ async function carregarTitulos(exibirLoading = true) {
 
     const { data, error } = await supabase
       .from('titulos_financeiros_pagos')
-      .select('id, fornecedor, historico, sufixo, numero_titulo, valor_pago, data_emissao, data_baixa, data_ultimo_pagamento')
+      .select('id, fornecedor, historico, observacao, complemento, sufixo, numero_titulo, valor_pago, data_vencimento, data_baixa, data_ultimo_pagamento')
       .gte('data_baixa', startIso)
       .lt('data_baixa', endIso)
       .order('data_baixa', { ascending: true })
@@ -179,7 +251,7 @@ async function importarTitulos() {
       timeStyle: 'short'
     }).format(new Date())
 
-    sucesso.value = `Webhook acionado para a competencia ${competenciaFormatada.value}. Atualizando a lista de titulos...`
+    sucesso.value = `Importacao iniciada para a competencia ${competenciaFormatada.value}. Atualizando a lista de titulos...`
 
     for (let tentativa = 0; tentativa < 4; tentativa += 1) {
       await carregarTitulos(tentativa === 0)
@@ -326,12 +398,14 @@ function exportarPdf() {
       startY: currentY + 18,
       margin: { left: marginX, right: marginX },
       theme: 'striped',
-      head: [['Fornecedor', 'Historico', 'Parcela', 'Emissao', 'Pagamento', 'Valor pago']],
+      head: [['Fornecedor', 'Historico', 'Parcela', 'Vencimento', 'Pagamento', 'Valor pago']],
       body: grupo.itens.map((titulo) => [
         normalizeText(titulo.fornecedor),
-        normalizeText(titulo.historico),
+        [normalizeText(titulo.historico), normalizeText(titulo.observacao), normalizeText(titulo.complemento)]
+          .filter((value) => value !== '-')
+          .join('\n'),
         getParcela(titulo),
-        formatDateBR(titulo.data_emissao),
+        formatDateBR(titulo.data_vencimento),
         formatDateBR(getDataPagamento(titulo)),
         formatCurrencyBRL(titulo.valor_pago)
       ]),
@@ -406,7 +480,7 @@ onMounted(async () => {
                 Importe os titulos pagos, classifique por loja e gere um PDF apresentavel.
               </h1>
               <p class="max-w-2xl text-sm leading-7 text-slate-300 sm:text-base">
-                O fluxo parte do n8n para buscar os titulos do mes, salva no Supabase e centraliza a distribuicao das despesas em uma tela unica.
+                Centralize a importacao dos titulos do ERP Solidus, organize a distribuicao das despesas e gere um relatorio final pronto para apresentacao.
               </p>
             </div>
           </div>
@@ -416,91 +490,67 @@ onMounted(async () => {
               Fluxo
             </p>
             <p>1. Escolha a competencia.</p>
-            <p>2. Dispare o webhook do n8n.</p>
-            <p>3. Classifique cada titulo em uma categoria.</p>
+            <p>2. Importe os titulos do ERP Solidus.</p>
+            <p>3. Classifique cada titulo em um destino.</p>
             <p>4. Gere e baixe o relatorio final em PDF.</p>
           </div>
         </div>
       </section>
 
-      <section class="grid gap-6 xl:grid-cols-[1.3fr_0.9fr]">
-        <div class="rounded-[28px] border border-white/10 bg-slate-950/70 p-6 shadow-2xl shadow-black/20 backdrop-blur">
-          <div class="flex flex-col gap-6">
-            <div class="flex flex-col gap-3">
-              <p class="text-sm font-semibold uppercase tracking-[0.28em] text-sky-300">
-                Importacao mensal
-              </p>
-              <h2 class="text-2xl font-semibold text-white">
-                Competencia e sincronizacao
-              </h2>
-              <p class="max-w-2xl text-sm text-slate-300">
-                O sistema envia a competencia selecionada para o n8n no formato <code class="rounded bg-slate-800 px-2 py-1 text-emerald-300">MM/AAAA</code> e depois recarrega os titulos pagos no Supabase.
-              </p>
-            </div>
+      <section class="rounded-[28px] border border-white/10 bg-slate-950/70 p-6 shadow-2xl shadow-black/20 backdrop-blur">
+        <div class="flex flex-col gap-6">
+          <div class="flex flex-col gap-3">
+            <p class="text-sm font-semibold uppercase tracking-[0.28em] text-sky-300">
+              Importacao mensal
+            </p>
+            <h2 class="text-2xl font-semibold text-white">
+              Competencia e atualizacao dos titulos
+            </h2>
+            <p class="max-w-2xl text-sm text-slate-300">
+              Escolha o periodo que deseja importar e atualize a base com os titulos pagos vindos do ERP Solidus.
+            </p>
+          </div>
 
-            <div class="grid gap-4 md:grid-cols-[minmax(0,220px)_1fr]">
-              <label class="grid gap-2 text-sm font-medium text-slate-200">
-                Competencia
-                <input
-                  v-model="competenciaInput"
-                  type="month"
-                  class="rounded-2xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20"
-                >
-              </label>
-
-              <div class="flex flex-col justify-end gap-3 sm:flex-row">
-                <button
-                  type="button"
-                  class="inline-flex items-center justify-center rounded-2xl border border-emerald-400/30 bg-emerald-400/15 px-5 py-3 text-sm font-semibold text-emerald-100 transition hover:border-emerald-300 hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-60"
-                  :disabled="importando"
-                  @click="importarTitulos"
-                >
-                  {{ importando ? 'Importando do n8n...' : 'Importar titulos do mes' }}
-                </button>
-
-                <button
-                  type="button"
-                  class="inline-flex items-center justify-center rounded-2xl border border-sky-400/30 bg-sky-400/10 px-5 py-3 text-sm font-semibold text-sky-100 transition hover:border-sky-300 hover:bg-sky-400/20 disabled:cursor-not-allowed disabled:opacity-60"
-                  :disabled="carregando"
-                  @click="carregarTitulos()"
-                >
-                  {{ carregando ? 'Atualizando...' : 'Atualizar lista' }}
-                </button>
-              </div>
-            </div>
-
-            <div class="rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3 text-sm text-slate-300">
-              Competencia enviada ao n8n: <span class="font-semibold text-emerald-300">{{ competenciaFormatada || '--/----' }}</span>
-              <span
-                v-if="ultimaImportacao"
-                class="ml-2 text-slate-400"
+          <div class="grid gap-4 md:grid-cols-[minmax(0,220px)_1fr]">
+            <label class="grid gap-2 text-sm font-medium text-slate-200">
+              Competencia
+              <input
+                v-model="competenciaInput"
+                type="month"
+                class="rounded-2xl border border-white/10 bg-slate-900/80 px-4 py-3 text-white outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20"
               >
-                | Ultima importacao: {{ ultimaImportacao }}
-              </span>
+            </label>
+
+            <div class="flex flex-col justify-end gap-3 sm:flex-row">
+              <button
+                type="button"
+                class="inline-flex items-center justify-center rounded-2xl border border-emerald-400/30 bg-emerald-400/15 px-5 py-3 text-sm font-semibold text-emerald-100 transition hover:border-emerald-300 hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-60"
+                :disabled="importando"
+                @click="importarTitulos"
+              >
+                {{ importando ? 'Importando titulos...' : 'Importar titulos do ERP Solidus' }}
+              </button>
+
+              <button
+                type="button"
+                class="inline-flex items-center justify-center rounded-2xl border border-sky-400/30 bg-sky-400/10 px-5 py-3 text-sm font-semibold text-sky-100 transition hover:border-sky-300 hover:bg-sky-400/20 disabled:cursor-not-allowed disabled:opacity-60"
+                :disabled="carregando"
+                @click="carregarTitulos()"
+              >
+                {{ carregando ? 'Atualizando...' : 'Atualizar lista' }}
+              </button>
             </div>
           </div>
-        </div>
 
-        <div class="rounded-[28px] border border-white/10 bg-slate-950/70 p-6 shadow-2xl shadow-black/20 backdrop-blur">
-          <div class="space-y-4">
-            <div class="space-y-2">
-              <p class="text-sm font-semibold uppercase tracking-[0.28em] text-amber-300">
-                Categorias de destino
-              </p>
-              <h2 class="text-2xl font-semibold text-white">
-                Rateio simplificado
-              </h2>
-            </div>
-
-            <div class="grid max-h-[380px] gap-3 overflow-y-auto pr-1">
-              <div
-                v-for="categoria in RATEIO_CATEGORIAS"
-                :key="categoria.codigo"
-                class="rounded-2xl border border-white/10 bg-slate-900/75 px-4 py-3 text-sm text-slate-200"
-              >
-                {{ categoria.label }}
-              </div>
-            </div>
+          <div class="rounded-2xl border border-white/10 bg-slate-900/70 px-4 py-3 text-sm text-slate-300">
+            Periodo selecionado para importacao:
+            <span class="font-semibold text-emerald-300">{{ competenciaFormatada || '--/----' }}</span>
+            <span
+              v-if="ultimaImportacao"
+              class="ml-2 text-slate-400"
+            >
+              | Ultima atualizacao: {{ ultimaImportacao }}
+            </span>
           </div>
         </div>
       </section>
@@ -562,6 +612,80 @@ onMounted(async () => {
             </div>
 
             <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <div class="relative">
+                <button
+                  type="button"
+                  class="inline-flex min-w-[260px] items-center justify-between rounded-2xl border border-white/10 bg-slate-900/80 px-4 py-3 text-sm text-white transition hover:bg-slate-900 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-400/20"
+                  @click="filtroHistoricosAberto = !filtroHistoricosAberto"
+                >
+                  <span class="truncate text-left">
+                    {{
+                      historicosSelecionados.length
+                        ? `${historicosSelecionados.length} historico(s) selecionado(s)`
+                        : 'Filtrar por historico'
+                    }}
+                  </span>
+                  <span class="text-slate-400">{{ filtroHistoricosAberto ? '▲' : '▼' }}</span>
+                </button>
+
+                <div
+                  v-if="filtroHistoricosAberto"
+                  class="absolute left-0 top-[calc(100%+0.5rem)] z-20 w-[420px] max-w-[90vw] rounded-2xl border border-white/10 bg-slate-950/95 p-4 shadow-2xl shadow-black/30 backdrop-blur"
+                >
+                  <div class="mb-3 flex items-center justify-between">
+                    <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
+                      Historicos
+                    </p>
+                    <div class="flex items-center gap-3">
+                      <button
+                        type="button"
+                        class="text-xs font-medium text-sky-300 transition hover:text-sky-200"
+                        @click="selecionarTodosHistoricos"
+                      >
+                        Selecionar todos
+                      </button>
+                      <button
+                        type="button"
+                        class="text-xs font-medium text-emerald-300 transition hover:text-emerald-200"
+                        @click="limparFiltroHistorico"
+                      >
+                        Limpar
+                      </button>
+                    </div>
+                  </div>
+
+                  <input
+                    v-model="buscaHistorico"
+                    type="text"
+                    placeholder="Buscar historico..."
+                    class="mb-3 w-full rounded-xl border border-white/10 bg-slate-900/90 px-3 py-2.5 text-sm text-white outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20"
+                  >
+
+                  <div class="max-h-80 space-y-2 overflow-y-auto pr-1">
+                    <label
+                      v-for="historico in historicosFiltrados"
+                      :key="historico"
+                      class="flex cursor-pointer items-start gap-3 rounded-xl border border-white/5 bg-white/[0.03] px-3 py-2 text-sm text-slate-200 transition hover:bg-white/[0.06]"
+                    >
+                      <input
+                        :checked="historicosSelecionados.includes(historico)"
+                        type="checkbox"
+                        class="mt-1 h-4 w-4 rounded border-white/20 bg-slate-900 text-emerald-400 focus:ring-emerald-400/30"
+                        @change="alternarHistorico(historico)"
+                      >
+                      <span class="leading-6">{{ historico }}</span>
+                    </label>
+
+                    <div
+                      v-if="!historicosFiltrados.length"
+                      class="rounded-xl border border-white/5 bg-white/[0.03] px-3 py-4 text-sm text-slate-400"
+                    >
+                      Nenhum historico encontrado para essa busca.
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <input
                 v-model="busca"
                 type="text"
@@ -598,25 +722,38 @@ onMounted(async () => {
             v-else
             class="overflow-hidden rounded-3xl border border-white/10 bg-slate-900/70"
           >
+            <div class="border-b border-white/10 bg-slate-900/90 px-4 py-3 text-sm text-slate-300">
+              Exibindo
+              <span class="font-semibold text-white">{{ titulosFiltrados.length }}</span>
+              de
+              <span class="font-semibold text-white">{{ titulos.length }}</span>
+              titulo(s)
+              <span v-if="historicosSelecionados.length">
+                com filtro de historico aplicado
+              </span>
+            </div>
             <div class="overflow-x-auto">
               <table class="min-w-full text-left text-sm">
                 <thead class="bg-slate-800/90 text-slate-300">
-                  <tr>
-                    <th class="px-4 py-4 font-medium">
-                      Fornecedor
-                    </th>
-                    <th class="px-4 py-4 font-medium">
-                      Historico
-                    </th>
-                    <th class="px-4 py-4 font-medium">
-                      Parcela
-                    </th>
-                    <th class="px-4 py-4 font-medium">
-                      Emissao
-                    </th>
-                    <th class="px-4 py-4 font-medium">
-                      Pagamento
-                    </th>
+                      <tr>
+                        <th class="px-4 py-4 font-medium">
+                          Fornecedor
+                        </th>
+                        <th class="px-4 py-4 font-medium">
+                          Historico
+                        </th>
+                        <th class="px-4 py-4 font-medium">
+                          Observacao / Complemento
+                        </th>
+                        <th class="px-4 py-4 font-medium">
+                          Parcela
+                        </th>
+                        <th class="px-4 py-4 font-medium">
+                          Vencimento
+                        </th>
+                        <th class="px-4 py-4 font-medium">
+                          Pagamento
+                        </th>
                     <th class="px-4 py-4 font-medium text-right">
                       Valor pago
                     </th>
@@ -639,10 +776,21 @@ onMounted(async () => {
                       {{ normalizeText(titulo.historico) }}
                     </td>
                     <td class="px-4 py-4 text-slate-300">
+                      <div class="space-y-2">
+                        <p>{{ normalizeText(titulo.observacao) }}</p>
+                        <p
+                          v-if="titulo.complemento"
+                          class="text-xs text-slate-400"
+                        >
+                          {{ titulo.complemento }}
+                        </p>
+                      </div>
+                    </td>
+                    <td class="px-4 py-4 text-slate-300">
                       {{ getParcela(titulo) }}
                     </td>
                     <td class="px-4 py-4 text-slate-300">
-                      {{ formatDateBR(titulo.data_emissao) }}
+                      {{ formatDateBR(titulo.data_vencimento) }}
                     </td>
                     <td class="px-4 py-4 text-slate-300">
                       {{ formatDateBR(getDataPagamento(titulo)) }}
@@ -760,7 +908,7 @@ onMounted(async () => {
                           Parcela
                         </th>
                         <th class="px-4 py-3 font-medium">
-                          Emissao
+                          Vencimento
                         </th>
                         <th class="px-4 py-3 font-medium">
                           Pagamento
@@ -786,7 +934,7 @@ onMounted(async () => {
                           {{ getParcela(titulo) }}
                         </td>
                         <td class="px-4 py-3 text-slate-300">
-                          {{ formatDateBR(titulo.data_emissao) }}
+                          {{ formatDateBR(titulo.data_vencimento) }}
                         </td>
                         <td class="px-4 py-3 text-slate-300">
                           {{ formatDateBR(getDataPagamento(titulo)) }}

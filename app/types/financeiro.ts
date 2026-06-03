@@ -4,10 +4,12 @@ export interface TituloPagoRow {
   id: number
   fornecedor: string | null
   historico: string | null
+  observacao: string | null
+  complemento: string | null
   sufixo: string | null
   numero_titulo: string | null
   valor_pago: number | null
-  data_emissao: string | null
+  data_vencimento: string | null
   data_baixa: string | null
   data_ultimo_pagamento: string | null
 }
