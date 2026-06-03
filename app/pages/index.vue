@@ -262,6 +262,10 @@ function selecionarCategoria(titulo: TituloListItem, categoriaCodigo: RateioCate
   classificacoesPendentes.value = true
 }
 
+function shouldOpenCategoriaAcima(index: number, totalItens: number) {
+  return index >= Math.max(totalItens - 3, 0)
+}
+
 async function irParaPagina(page: number) {
   const paginaDestino = Math.min(Math.max(1, page), totalPaginas.value)
 
@@ -1034,7 +1038,7 @@ watch(totalPaginas, () => {
 
                 <tbody class="divide-y divide-white/10 text-slate-100">
                   <tr
-                    v-for="titulo in titulosPaginados"
+                    v-for="(titulo, index) in titulosPaginados"
                     :key="titulo.id"
                     class="align-top transition hover:bg-white/[0.03]"
                   >
@@ -1087,7 +1091,8 @@ watch(totalPaginas, () => {
 
                         <div
                           v-if="categoriaAbertaId === titulo.id"
-                          class="absolute right-0 top-[calc(100%+0.5rem)] z-30 w-[320px] max-w-[min(90vw,360px)] overflow-hidden rounded-2xl border border-white/10 bg-slate-950/95 shadow-2xl shadow-black/30 backdrop-blur"
+                          class="absolute right-0 z-30 w-[320px] max-w-[min(90vw,360px)] overflow-hidden rounded-2xl border border-white/10 bg-slate-950/95 shadow-2xl shadow-black/30 backdrop-blur"
+                          :class="shouldOpenCategoriaAcima(index, titulosPaginados.length) ? 'bottom-[calc(100%+0.5rem)]' : 'top-[calc(100%+0.5rem)]'"
                         >
                           <div class="max-h-80 overflow-y-auto p-2">
                             <button
