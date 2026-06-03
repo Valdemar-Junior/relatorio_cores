@@ -818,14 +818,14 @@ onBeforeUnmount(() => {
             <div class="overflow-x-auto xl:overflow-visible">
               <table class="min-w-full table-fixed text-left text-sm">
                 <colgroup>
-                  <col class="w-[15%]">
-                  <col class="w-[13%]">
-                  <col class="w-[19%]">
+                  <col class="w-[14%]">
+                  <col class="w-[12%]">
+                  <col class="w-[18%]">
                   <col class="w-[6%]">
                   <col class="w-[9%]">
                   <col class="w-[9%]">
                   <col class="w-[8%]">
-                  <col class="w-[21%]">
+                  <col class="w-[24%]">
                 </colgroup>
                 <thead class="bg-slate-800/90 text-slate-300">
                   <tr>
@@ -928,18 +928,18 @@ onBeforeUnmount(() => {
                     </td>
                     <td class="px-4 py-4">
                       <div
-                        class="relative min-w-[280px] xl:min-w-[300px]"
+                        class="relative w-full"
                         @click.stop
                       >
                         <button
                           type="button"
-                          class="flex w-full items-start justify-between gap-3 rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-left text-sm text-white outline-none transition hover:bg-slate-950 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20"
+                          class="flex w-full items-start justify-between gap-2 rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-left text-sm text-white outline-none transition hover:bg-slate-950 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20"
                           @click="alternarCategoriaAberta(titulo.id)"
                         >
-                          <span class="block flex-1 whitespace-normal leading-5">
+                          <span class="block min-w-0 flex-1 break-words whitespace-normal leading-5">
                             {{ getCategoriaLabel(titulo.categoriaCodigo) }}
                           </span>
-                          <span class="pt-0.5 text-slate-400">
+                          <span class="shrink-0 pt-0.5 text-slate-400">
                             {{ categoriaAbertaId === titulo.id ? '▲' : '▼' }}
                           </span>
                         </button>
