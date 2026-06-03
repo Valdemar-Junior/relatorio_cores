@@ -439,20 +439,20 @@ function exportarPdf() {
     }
   })
 
-  let currentY = (doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? 170
+  let currentY = ((doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? 170) + 28
 
   for (const grupo of gruposRelatorio.value) {
-    if (currentY > 680) {
+    if (currentY > 660) {
       doc.addPage()
       currentY = 50
     }
 
     doc.setTextColor(15, 23, 42)
     doc.setFontSize(15)
-    doc.text(grupo.label, marginX, currentY + 6)
+    doc.text(grupo.label, marginX, currentY)
 
     autoTable(doc, {
-      startY: currentY + 18,
+      startY: currentY + 14,
       margin: { left: marginX, right: marginX },
       theme: 'striped',
       head: [['Fornecedor', 'Historico', 'Parcela', 'Vencimento', 'Pagamento', 'Valor pago']],
@@ -486,7 +486,7 @@ function exportarPdf() {
       }
     })
 
-    currentY = ((doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? currentY) + 20
+    currentY = ((doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? currentY) + 28
   }
 
   doc.save(`relatorio-rateio-${competenciaFormatada.value.replace('/', '-')}.pdf`)
@@ -789,10 +789,20 @@ onMounted(async () => {
                 com filtro de historico aplicado
               </span>
             </div>
-            <div class="overflow-x-auto">
-              <table class="min-w-full text-left text-sm">
-                    <thead class="bg-slate-800/90 text-slate-300">
-                      <tr>
+            <div class="overflow-x-auto xl:overflow-visible">
+              <table class="min-w-full table-fixed text-left text-sm">
+                <colgroup>
+                  <col class="w-[17%]">
+                  <col class="w-[16%]">
+                  <col class="w-[21%]">
+                  <col class="w-[7%]">
+                  <col class="w-[10%]">
+                  <col class="w-[10%]">
+                  <col class="w-[9%]">
+                  <col class="w-[18%]">
+                </colgroup>
+                <thead class="bg-slate-800/90 text-slate-300">
+                  <tr>
                         <th class="px-4 py-4 font-medium">
                           <button
                             type="button"
@@ -861,13 +871,13 @@ onMounted(async () => {
                     :key="titulo.id"
                     class="align-top transition hover:bg-white/[0.03]"
                   >
-                    <td class="px-4 py-4 font-medium text-white">
+                    <td class="px-4 py-4 font-medium text-white break-words">
                       {{ normalizeText(titulo.fornecedor) }}
                     </td>
-                    <td class="px-4 py-4 text-slate-300">
+                    <td class="px-4 py-4 text-slate-300 break-words">
                       {{ normalizeText(titulo.historico) }}
                     </td>
-                    <td class="px-4 py-4 text-slate-300">
+                    <td class="px-4 py-4 text-slate-300 break-words">
                       <div class="space-y-2">
                         <p>{{ normalizeText(titulo.observacao) }}</p>
                         <p
@@ -893,7 +903,7 @@ onMounted(async () => {
                     <td class="px-4 py-4">
                       <select
                         v-model="titulo.categoriaCodigo"
-                        class="w-full rounded-2xl border border-white/10 bg-slate-950/80 px-3 py-2 text-sm text-white outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20"
+                        class="w-full min-w-[240px] rounded-2xl border border-white/10 bg-slate-950/80 px-3 py-2 text-sm text-white outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20 xl:min-w-0"
                       >
                         <option :value="null">
                           Selecione
