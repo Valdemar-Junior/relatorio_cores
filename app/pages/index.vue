@@ -48,6 +48,7 @@ const detalheImportacao = ref('Estamos organizando a base para carregar os titul
 const paginaAtual = ref(1)
 const classificacoesPendentes = ref(false)
 const modalConfirmacaoImportacaoAberto = ref(false)
+const telaInicializada = ref(false)
 
 const competenciaFormatada = computed(() => competenciaFromInput(competenciaInput.value))
 
@@ -667,18 +668,25 @@ onMounted(async () => {
   }
 
   await carregarTitulos()
+  telaInicializada.value = true
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', fecharMenus)
 })
 
-watch(competenciaInput, async (value) => {
+watch(competenciaInput, async (value, oldValue) => {
   if (!import.meta.client) {
     return
   }
 
   localStorage.setItem(LOCAL_STORAGE_COMPETENCIA_KEY, value)
+
+  if (!telaInicializada.value || value === oldValue || importando.value) {
+    return
+  }
+
+  await carregarTitulos()
 })
 
 watch([busca, historicosSelecionados], () => {
