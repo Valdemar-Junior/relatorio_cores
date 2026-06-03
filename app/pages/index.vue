@@ -130,7 +130,9 @@ const paginaFinal = computed(() => Math.min(paginaAtual.value * TITULOS_POR_PAGI
 const paginaAtualCompleta = computed(() => titulosPaginados.value.every((titulo) => !!titulo.categoriaCodigo))
 
 const gruposRelatorio = computed(() =>
-  RATEIO_CATEGORIAS.map((categoria) => {
+  RATEIO_CATEGORIAS
+    .filter((categoria) => categoria.incluirNoRelatorio !== false)
+    .map((categoria) => {
     const itens = titulosFiltrados.value.filter((titulo) => titulo.categoriaCodigo === categoria.codigo)
     const total = itens.reduce((accumulator, item) => accumulator + Number(item.valor_pago ?? 0), 0)
 
@@ -139,7 +141,7 @@ const gruposRelatorio = computed(() =>
       itens,
       total
     }
-  }).filter((grupo) => grupo.itens.length > 0)
+    }).filter((grupo) => grupo.itens.length > 0)
 )
 
 function sanitizeSearch(value: string) {
@@ -1189,7 +1191,7 @@ watch(totalPaginas, () => {
             v-if="!gruposRelatorio.length"
             class="rounded-2xl border border-white/10 bg-slate-900/60 px-5 py-12 text-center text-sm text-slate-300"
           >
-            Classifique os titulos para visualizar o relatorio consolidado.
+            Classifique os titulos em categorias do relatorio. Itens marcados como "Sem rateio" nao aparecem no consolidado nem no PDF.
           </div>
 
           <div

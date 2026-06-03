@@ -1,4 +1,5 @@
 export const RATEIO_CATEGORIAS = [
+  { codigo: 'sem_rateio', label: 'Sem rateio', incluirNoRelatorio: false },
   { codigo: 'despesa_loja_assu', label: 'Despesa Loja Assu' },
   { codigo: 'despesa_loja_mossoro', label: 'Despesa Loja Mossoro' },
   { codigo: 'despesa_rateada_geral', label: 'Despesa Rateada Geral' },

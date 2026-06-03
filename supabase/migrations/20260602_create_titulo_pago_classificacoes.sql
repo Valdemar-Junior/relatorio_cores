@@ -14,6 +14,7 @@ create table if not exists public.titulo_pago_classificacoes (
   constraint titulo_pago_classificacoes_categoria_codigo_check
     check (
       categoria_codigo in (
+        'sem_rateio',
         'despesa_loja_assu',
         'despesa_loja_mossoro',
         'despesa_rateada_geral',
