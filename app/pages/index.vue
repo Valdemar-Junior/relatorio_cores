@@ -37,6 +37,7 @@ const filtroHistoricosAberto = ref(false)
 const buscaHistorico = ref('')
 const sortKey = ref<SortKey>('valor_pago')
 const sortDirection = ref<SortDirection>('desc')
+const categoriaAbertaId = ref<number | null>(null)
 
 const competenciaFormatada = computed(() => competenciaFromInput(competenciaInput.value))
 
@@ -221,6 +222,19 @@ function limparFiltroHistorico() {
 
 function selecionarTodosHistoricos() {
   historicosSelecionados.value = [...historicosFiltrados.value]
+}
+
+function getCategoriaLabel(codigo: RateioCategoriaCodigo | null) {
+  return codigo ? RATEIO_CATEGORIAS_MAP[codigo] : 'Selecione'
+}
+
+function alternarCategoriaAberta(tituloId: number) {
+  categoriaAbertaId.value = categoriaAbertaId.value === tituloId ? null : tituloId
+}
+
+function selecionarCategoria(titulo: TituloListItem, categoriaCodigo: RateioCategoriaCodigo | null) {
+  titulo.categoriaCodigo = categoriaCodigo
+  categoriaAbertaId.value = null
 }
 
 async function carregarTitulos(exibirLoading = true) {
@@ -515,8 +529,18 @@ function getErrorMessage(error: unknown, fallback: string) {
   return fallback
 }
 
+function fecharMenus() {
+  categoriaAbertaId.value = null
+  filtroHistoricosAberto.value = false
+}
+
 onMounted(async () => {
+  document.addEventListener('click', fecharMenus)
   await carregarTitulos()
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', fecharMenus)
 })
 </script>
 
@@ -673,6 +697,7 @@ onMounted(async () => {
                 <button
                   type="button"
                   class="inline-flex min-w-[260px] items-center justify-between rounded-2xl border border-white/10 bg-slate-900/80 px-4 py-3 text-sm text-white transition hover:bg-slate-900 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-400/20"
+                  @click.stop
                   @click="filtroHistoricosAberto = !filtroHistoricosAberto"
                 >
                   <span class="truncate text-left">
@@ -688,6 +713,7 @@ onMounted(async () => {
                 <div
                   v-if="filtroHistoricosAberto"
                   class="absolute left-0 top-[calc(100%+0.5rem)] z-20 w-[420px] max-w-[90vw] rounded-2xl border border-white/10 bg-slate-950/95 p-4 shadow-2xl shadow-black/30 backdrop-blur"
+                  @click.stop
                 >
                   <div class="mb-3 flex items-center justify-between">
                     <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">
@@ -792,14 +818,14 @@ onMounted(async () => {
             <div class="overflow-x-auto xl:overflow-visible">
               <table class="min-w-full table-fixed text-left text-sm">
                 <colgroup>
-                  <col class="w-[17%]">
-                  <col class="w-[16%]">
-                  <col class="w-[21%]">
-                  <col class="w-[7%]">
-                  <col class="w-[10%]">
-                  <col class="w-[10%]">
+                  <col class="w-[15%]">
+                  <col class="w-[13%]">
+                  <col class="w-[19%]">
+                  <col class="w-[6%]">
                   <col class="w-[9%]">
-                  <col class="w-[18%]">
+                  <col class="w-[9%]">
+                  <col class="w-[8%]">
+                  <col class="w-[21%]">
                 </colgroup>
                 <thead class="bg-slate-800/90 text-slate-300">
                   <tr>
@@ -901,21 +927,48 @@ onMounted(async () => {
                       {{ formatCurrencyBRL(titulo.valor_pago) }}
                     </td>
                     <td class="px-4 py-4">
-                      <select
-                        v-model="titulo.categoriaCodigo"
-                        class="w-full min-w-[240px] rounded-2xl border border-white/10 bg-slate-950/80 px-3 py-2 text-sm text-white outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20 xl:min-w-0"
+                      <div
+                        class="relative min-w-[280px] xl:min-w-[300px]"
+                        @click.stop
                       >
-                        <option :value="null">
-                          Selecione
-                        </option>
-                        <option
-                          v-for="categoria in RATEIO_CATEGORIAS"
-                          :key="categoria.codigo"
-                          :value="categoria.codigo"
+                        <button
+                          type="button"
+                          class="flex w-full items-start justify-between gap-3 rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-left text-sm text-white outline-none transition hover:bg-slate-950 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20"
+                          @click="alternarCategoriaAberta(titulo.id)"
                         >
-                          {{ categoria.label }}
-                        </option>
-                      </select>
+                          <span class="block flex-1 whitespace-normal leading-5">
+                            {{ getCategoriaLabel(titulo.categoriaCodigo) }}
+                          </span>
+                          <span class="pt-0.5 text-slate-400">
+                            {{ categoriaAbertaId === titulo.id ? '▲' : '▼' }}
+                          </span>
+                        </button>
+
+                        <div
+                          v-if="categoriaAbertaId === titulo.id"
+                          class="absolute right-0 top-[calc(100%+0.5rem)] z-30 w-[320px] max-w-[min(90vw,360px)] overflow-hidden rounded-2xl border border-white/10 bg-slate-950/95 shadow-2xl shadow-black/30 backdrop-blur"
+                        >
+                          <div class="max-h-80 overflow-y-auto p-2">
+                            <button
+                              type="button"
+                              class="flex w-full rounded-xl px-3 py-2.5 text-left text-sm text-slate-200 transition hover:bg-white/[0.06]"
+                              @click="selecionarCategoria(titulo, null)"
+                            >
+                              Selecione
+                            </button>
+                            <button
+                              v-for="categoria in RATEIO_CATEGORIAS"
+                              :key="categoria.codigo"
+                              type="button"
+                              class="flex w-full rounded-xl px-3 py-2.5 text-left text-sm leading-5 text-slate-200 transition hover:bg-white/[0.06]"
+                              :class="titulo.categoriaCodigo === categoria.codigo ? 'bg-emerald-400/10 text-emerald-200' : ''"
+                              @click="selecionarCategoria(titulo, categoria.codigo)"
+                            >
+                              {{ categoria.label }}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     </td>
                   </tr>
                 </tbody>
