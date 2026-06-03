@@ -23,3 +23,17 @@ export interface TituloClassificacaoRow {
 export interface TituloListItem extends TituloPagoRow {
   categoriaCodigo: RateioCategoriaCodigo | null
 }
+
+export interface ImportacaoTitulosWebhookResponse {
+  success?: boolean
+  competencia?: string
+  total_importado?: number | string
+  message?: string
+}
+
+export interface ImportacaoTitulosApiResponse {
+  ok: boolean
+  competencia: string
+  totalImportado: number
+  message: string
+}

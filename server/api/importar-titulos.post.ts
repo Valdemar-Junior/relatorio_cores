@@ -1,3 +1,5 @@
+import type { ImportacaoTitulosWebhookResponse } from '../../app/types/financeiro'
+
 function isCompetenciaValida(value: string) {
   return /^(0[1-9]|1[0-2])\/\d{4}$/.test(value)
 }
@@ -15,7 +17,7 @@ export default defineEventHandler(async (event) => {
   }
 
   try {
-    const response = await $fetch(config.n8nWebhookUrl, {
+    const response = await $fetch<ImportacaoTitulosWebhookResponse>(config.n8nWebhookUrl, {
       method: 'POST',
       query: {
         competencia
@@ -25,10 +27,14 @@ export default defineEventHandler(async (event) => {
       }
     })
 
+    const totalImportado = Number(response?.total_importado ?? 0)
+    const message = response?.message?.trim() || 'Importacao concluida com sucesso.'
+
     return {
-      ok: true,
+      ok: response?.success !== false,
       competencia,
-      response
+      totalImportado: Number.isFinite(totalImportado) ? totalImportado : 0,
+      message
     }
   }
   catch (error) {

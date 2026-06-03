@@ -3,7 +3,7 @@ import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
 
 import { RATEIO_CATEGORIAS, RATEIO_CATEGORIAS_MAP, type RateioCategoriaCodigo } from '../constants/rateioCategorias'
-import type { TituloClassificacaoRow, TituloListItem, TituloPagoRow } from '../types/financeiro'
+import type { ImportacaoTitulosApiResponse, TituloClassificacaoRow, TituloListItem, TituloPagoRow } from '../types/financeiro'
 import {
   competenciaFromInput,
   formatCurrencyBRL,
@@ -19,6 +19,11 @@ useHead({
 
 type SortKey = 'fornecedor' | 'historico' | 'data_vencimento' | 'data_pagamento' | 'valor_pago'
 type SortDirection = 'asc' | 'desc'
+
+const LOCAL_STORAGE_COMPETENCIA_KEY = 'rateio_despesas_competencia'
+const LOCAL_STORAGE_ULTIMA_IMPORTACAO_KEY = 'rateio_despesas_ultima_importacao'
+const TITULOS_BATCH_SIZE = 1000
+const TITULOS_POR_PAGINA = 100
 
 const supabase = useSupabaseClient()
 
@@ -38,6 +43,11 @@ const buscaHistorico = ref('')
 const sortKey = ref<SortKey>('valor_pago')
 const sortDirection = ref<SortDirection>('desc')
 const categoriaAbertaId = ref<number | null>(null)
+const etapaImportacao = ref('Preparando a importacao...')
+const detalheImportacao = ref('Estamos organizando a base para carregar os titulos da competencia selecionada.')
+const paginaAtual = ref(1)
+const classificacoesPendentes = ref(false)
+const modalConfirmacaoImportacaoAberto = ref(false)
 
 const competenciaFormatada = computed(() => competenciaFromInput(competenciaInput.value))
 
@@ -103,6 +113,20 @@ const totalTitulos = computed(() => titulos.value.length)
 const totalClassificados = computed(() => titulos.value.filter((titulo) => !!titulo.categoriaCodigo).length)
 const totalPendentes = computed(() => totalTitulos.value - totalClassificados.value)
 const valorTotalPago = computed(() => titulos.value.reduce((total, titulo) => total + Number(titulo.valor_pago ?? 0), 0))
+const totalPaginas = computed(() => Math.max(1, Math.ceil(titulosFiltrados.value.length / TITULOS_POR_PAGINA)))
+const titulosPaginados = computed(() => {
+  const inicio = (paginaAtual.value - 1) * TITULOS_POR_PAGINA
+  return titulosFiltrados.value.slice(inicio, inicio + TITULOS_POR_PAGINA)
+})
+const paginaInicial = computed(() => {
+  if (!titulosFiltrados.value.length) {
+    return 0
+  }
+
+  return ((paginaAtual.value - 1) * TITULOS_POR_PAGINA) + 1
+})
+const paginaFinal = computed(() => Math.min(paginaAtual.value * TITULOS_POR_PAGINA, titulosFiltrados.value.length))
+const paginaAtualCompleta = computed(() => titulosPaginados.value.every((titulo) => !!titulo.categoriaCodigo))
 
 const gruposRelatorio = computed(() =>
   RATEIO_CATEGORIAS.map((categoria) => {
@@ -235,6 +259,101 @@ function alternarCategoriaAberta(tituloId: number) {
 function selecionarCategoria(titulo: TituloListItem, categoriaCodigo: RateioCategoriaCodigo | null) {
   titulo.categoriaCodigo = categoriaCodigo
   categoriaAbertaId.value = null
+  classificacoesPendentes.value = true
+}
+
+async function irParaPagina(page: number) {
+  const paginaDestino = Math.min(Math.max(1, page), totalPaginas.value)
+
+  if (paginaDestino === paginaAtual.value) {
+    return
+  }
+
+  if (paginaDestino > paginaAtual.value && !paginaAtualCompleta.value) {
+    erro.value = 'Classifique todos os titulos desta pagina antes de continuar.'
+    return
+  }
+
+  if (classificacoesPendentes.value) {
+    const salvou = await salvarClassificacoes(true)
+
+    if (!salvou) {
+      return
+    }
+  }
+
+  paginaAtual.value = paginaDestino
+}
+
+function solicitarImportacao() {
+  if (importando.value) {
+    return
+  }
+
+  if (titulos.value.length > 0) {
+    modalConfirmacaoImportacaoAberto.value = true
+    return
+  }
+
+  void importarTitulos()
+}
+
+async function confirmarNovaImportacao() {
+  modalConfirmacaoImportacaoAberto.value = false
+  await importarTitulos()
+}
+
+async function persistirCompetenciaAtual() {
+  if (!import.meta.client) {
+    return
+  }
+
+  localStorage.setItem(LOCAL_STORAGE_COMPETENCIA_KEY, competenciaInput.value)
+
+  if (ultimaImportacao.value) {
+    localStorage.setItem(LOCAL_STORAGE_ULTIMA_IMPORTACAO_KEY, ultimaImportacao.value)
+  }
+}
+
+async function carregarTodosTitulos(startIso: string, endIso: string) {
+  const todosTitulos: TituloPagoRow[] = []
+  let from = 0
+
+  while (true) {
+    const { data, error } = await supabase
+      .from('titulos_financeiros_pagos')
+      .select('id, fornecedor, historico, observacao, complemento, sufixo, numero_titulo, valor_pago, data_vencimento, data_baixa, data_ultimo_pagamento')
+      .gte('data_baixa', startIso)
+      .lt('data_baixa', endIso)
+      .order('data_baixa', { ascending: true })
+      .order('fornecedor', { ascending: true })
+      .range(from, from + TITULOS_BATCH_SIZE - 1)
+
+    if (error) {
+      throw error
+    }
+
+    const lote = (data as TituloPagoRow[] | null) ?? []
+    todosTitulos.push(...lote)
+
+    if (lote.length < TITULOS_BATCH_SIZE) {
+      break
+    }
+
+    from += TITULOS_BATCH_SIZE
+  }
+
+  return todosTitulos
+}
+
+function ajustarPaginacao() {
+  if (paginaAtual.value > totalPaginas.value) {
+    paginaAtual.value = totalPaginas.value
+  }
+
+  if (paginaAtual.value < 1) {
+    paginaAtual.value = 1
+  }
 }
 
 async function carregarTitulos(exibirLoading = true) {
@@ -253,18 +372,7 @@ async function carregarTitulos(exibirLoading = true) {
 
   try {
     const { startIso, endIso } = getCompetenciaRange(competenciaInput.value)
-
-    const { data, error } = await supabase
-      .from('titulos_financeiros_pagos')
-      .select('id, fornecedor, historico, observacao, complemento, sufixo, numero_titulo, valor_pago, data_vencimento, data_baixa, data_ultimo_pagamento')
-      .gte('data_baixa', startIso)
-      .lt('data_baixa', endIso)
-      .order('data_baixa', { ascending: true })
-      .order('fornecedor', { ascending: true })
-
-    if (error) {
-      throw error
-    }
+    const data = await carregarTodosTitulos(startIso, endIso)
 
     const classificacaoMap = new Map<number, RateioCategoriaCodigo>()
     const { data: classificacoes, error: classificacaoError } = await supabase
@@ -289,6 +397,8 @@ async function carregarTitulos(exibirLoading = true) {
       ...titulo,
       categoriaCodigo: classificacaoMap.get(titulo.id) ?? null
     }))
+    classificacoesPendentes.value = false
+    ajustarPaginacao()
   }
   catch (caughtError) {
     erro.value = getErrorMessage(caughtError, 'Nao foi possivel carregar os titulos dessa competencia.')
@@ -305,36 +415,31 @@ async function importarTitulos() {
   }
 
   importando.value = true
+  etapaImportacao.value = 'Importando titulos do ERP Solidus...'
+  detalheImportacao.value = `Limpando a base anterior e carregando os titulos da competencia ${competenciaFormatada.value}.`
   resetMensagens()
 
   try {
-    const totalAntes = titulos.value.length
-
-    await $fetch('/api/importar-titulos', {
+    const response = await $fetch<ImportacaoTitulosApiResponse>('/api/importar-titulos', {
       method: 'POST',
       body: {
         competencia: competenciaFormatada.value
       }
     })
 
+    etapaImportacao.value = 'Atualizando a lista de titulos...'
+    detalheImportacao.value = 'Isso costuma levar so alguns instantes. Enquanto finalizamos, pode pegar uma agua ou um cafe.'
+
+    await carregarTitulos(false)
+
     ultimaImportacao.value = new Intl.DateTimeFormat('pt-BR', {
       dateStyle: 'short',
       timeStyle: 'short'
     }).format(new Date())
+    await persistirCompetenciaAtual()
 
-    sucesso.value = `Importacao iniciada para a competencia ${competenciaFormatada.value}. Atualizando a lista de titulos...`
-
-    for (let tentativa = 0; tentativa < 4; tentativa += 1) {
-      await carregarTitulos(tentativa === 0)
-
-      if (titulos.value.length > 0 || totalAntes !== titulos.value.length) {
-        break
-      }
-
-      if (tentativa < 3) {
-        await new Promise((resolve) => setTimeout(resolve, 1500))
-      }
-    }
+    const totalImportado = response.totalImportado || titulos.value.length
+    sucesso.value = `${totalImportado} titulo(s) importado(s) com sucesso para ${response.competencia}.`
   }
   catch (caughtError) {
     erro.value = getErrorMessage(caughtError, 'Nao foi possivel acionar o webhook do n8n.')
@@ -344,19 +449,22 @@ async function importarTitulos() {
   }
 }
 
-async function salvarClassificacoes() {
+async function salvarClassificacoes(silencioso = false) {
   if (!titulos.value.length) {
     erro.value = 'Nao ha titulos carregados para salvar.'
-    return
+    return false
   }
 
   if (migrationAviso.value) {
     erro.value = 'Rode a migration da tabela de classificacoes no Supabase antes de salvar.'
-    return
+    return false
   }
 
   salvando.value = true
-  resetMensagens()
+
+  if (!silencioso) {
+    resetMensagens()
+  }
 
   try {
     const classificacoes = titulos.value
@@ -391,11 +499,18 @@ async function salvarClassificacoes() {
       }
     }
 
-    sucesso.value = 'Classificacoes salvas com sucesso.'
+    classificacoesPendentes.value = false
+
+    if (!silencioso) {
+      sucesso.value = 'Classificacoes salvas com sucesso.'
+    }
+
     await carregarTitulos(false)
+    return true
   }
   catch (caughtError) {
     erro.value = getErrorMessage(caughtError, 'Nao foi possivel salvar as classificacoes.')
+    return false
   }
   finally {
     salvando.value = false
@@ -536,11 +651,38 @@ function fecharMenus() {
 
 onMounted(async () => {
   document.addEventListener('click', fecharMenus)
+  const competenciaSalva = import.meta.client ? localStorage.getItem(LOCAL_STORAGE_COMPETENCIA_KEY) : null
+  const ultimaImportacaoSalva = import.meta.client ? localStorage.getItem(LOCAL_STORAGE_ULTIMA_IMPORTACAO_KEY) : null
+
+  if (competenciaSalva) {
+    competenciaInput.value = competenciaSalva
+  }
+
+  if (ultimaImportacaoSalva) {
+    ultimaImportacao.value = ultimaImportacaoSalva
+  }
+
   await carregarTitulos()
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', fecharMenus)
+})
+
+watch(competenciaInput, async (value) => {
+  if (!import.meta.client) {
+    return
+  }
+
+  localStorage.setItem(LOCAL_STORAGE_COMPETENCIA_KEY, value)
+})
+
+watch([busca, historicosSelecionados], () => {
+  paginaAtual.value = 1
+}, { deep: true })
+
+watch(totalPaginas, () => {
+  ajustarPaginacao()
 })
 </script>
 
@@ -607,18 +749,15 @@ onBeforeUnmount(() => {
                 type="button"
                 class="inline-flex items-center justify-center rounded-2xl border border-emerald-400/30 bg-emerald-400/15 px-5 py-3 text-sm font-semibold text-emerald-100 transition hover:border-emerald-300 hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-60"
                 :disabled="importando"
-                @click="importarTitulos"
+                @click="solicitarImportacao"
               >
-                {{ importando ? 'Importando titulos...' : 'Importar titulos do ERP Solidus' }}
-              </button>
-
-              <button
-                type="button"
-                class="inline-flex items-center justify-center rounded-2xl border border-sky-400/30 bg-sky-400/10 px-5 py-3 text-sm font-semibold text-sky-100 transition hover:border-sky-300 hover:bg-sky-400/20 disabled:cursor-not-allowed disabled:opacity-60"
-                :disabled="carregando"
-                @click="carregarTitulos()"
-              >
-                {{ carregando ? 'Atualizando...' : 'Atualizar lista' }}
+                {{
+                  importando
+                    ? 'Importando titulos...'
+                    : totalTitulos
+                      ? 'Importar nova competencia'
+                      : 'Importar titulos do ERP Solidus'
+                }}
               </button>
             </div>
           </div>
@@ -807,9 +946,11 @@ onBeforeUnmount(() => {
           >
             <div class="border-b border-white/10 bg-slate-900/90 px-4 py-3 text-sm text-slate-300">
               Exibindo
-              <span class="font-semibold text-white">{{ titulosFiltrados.length }}</span>
+              <span class="font-semibold text-white">{{ paginaInicial }}</span>
+              a
+              <span class="font-semibold text-white">{{ paginaFinal }}</span>
               de
-              <span class="font-semibold text-white">{{ titulos.length }}</span>
+              <span class="font-semibold text-white">{{ titulosFiltrados.length }}</span>
               titulo(s)
               <span v-if="historicosSelecionados.length">
                 com filtro de historico aplicado
@@ -893,7 +1034,7 @@ onBeforeUnmount(() => {
 
                 <tbody class="divide-y divide-white/10 text-slate-100">
                   <tr
-                    v-for="titulo in titulosFiltrados"
+                    v-for="titulo in titulosPaginados"
                     :key="titulo.id"
                     class="align-top transition hover:bg-white/[0.03]"
                   >
@@ -973,6 +1114,34 @@ onBeforeUnmount(() => {
                   </tr>
                 </tbody>
               </table>
+            </div>
+
+            <div class="border-t border-white/10 bg-slate-900/90 px-4 py-3">
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div class="flex flex-wrap items-center gap-3 text-xs uppercase tracking-[0.16em] text-slate-500">
+                  <span>Pagina {{ paginaAtual }} de {{ totalPaginas }}</span>
+                  <span>100 titulos por pagina</span>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    class="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-medium text-slate-200 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="paginaAtual === 1 || salvando"
+                    @click="irParaPagina(paginaAtual - 1)"
+                  >
+                    Anterior
+                  </button>
+                  <button
+                    type="button"
+                    class="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-medium text-slate-200 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="paginaAtual === totalPaginas || salvando || !paginaAtualCompleta"
+                    @click="irParaPagina(paginaAtual + 1)"
+                  >
+                    Proxima
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -1107,5 +1276,154 @@ onBeforeUnmount(() => {
         </div>
       </section>
     </div>
+
+    <Transition
+      enter-active-class="transition duration-300 ease-out"
+      enter-from-class="opacity-0"
+      enter-to-class="opacity-100"
+      leave-active-class="transition duration-200 ease-in"
+      leave-from-class="opacity-100"
+      leave-to-class="opacity-0"
+    >
+      <div
+        v-if="importando"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/78 px-6 backdrop-blur-md"
+      >
+        <div class="w-full max-w-xl overflow-hidden rounded-[32px] border border-white/10 bg-slate-950/95 shadow-[0_30px_120px_rgba(0,0,0,0.45)]">
+          <div class="relative overflow-hidden p-8 sm:p-10">
+            <div class="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.18),_transparent_35%),radial-gradient(circle_at_bottom_right,_rgba(14,165,233,0.12),_transparent_38%)]" />
+            <div class="relative space-y-8">
+              <div class="flex items-center gap-4">
+                <div class="relative flex h-16 w-16 items-center justify-center">
+                  <span class="absolute h-16 w-16 animate-ping rounded-full bg-emerald-400/15" />
+                  <span class="absolute h-12 w-12 rounded-full border border-emerald-300/30" />
+                  <span class="h-8 w-8 animate-spin rounded-full border-2 border-emerald-300/30 border-t-emerald-300" />
+                </div>
+
+                <div class="space-y-2">
+                  <p class="text-xs font-semibold uppercase tracking-[0.28em] text-emerald-300">
+                    Importacao em andamento
+                  </p>
+                  <h2 class="text-2xl font-semibold tracking-tight text-white sm:text-3xl">
+                    {{ etapaImportacao }}
+                  </h2>
+                </div>
+              </div>
+
+              <div class="space-y-3 rounded-3xl border border-white/10 bg-white/[0.03] p-5">
+                <p class="text-base leading-7 text-slate-200">
+                  {{ detalheImportacao }}
+                </p>
+                <p class="text-sm text-slate-400">
+                  Isso costuma levar so alguns instantes. Enquanto finalizamos, pode pegar uma agua ou um cafe.
+                </p>
+              </div>
+
+              <div class="grid gap-3 sm:grid-cols-3">
+                <div class="rounded-2xl border border-white/10 bg-slate-900/80 px-4 py-3">
+                  <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                    Competencia
+                  </p>
+                  <p class="mt-2 text-lg font-semibold text-white">
+                    {{ competenciaFormatada }}
+                  </p>
+                </div>
+                <div class="rounded-2xl border border-white/10 bg-slate-900/80 px-4 py-3">
+                  <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                    Etapa atual
+                  </p>
+                  <p class="mt-2 text-lg font-semibold text-white">
+                    {{ importando ? 'Sincronizando' : 'Concluido' }}
+                  </p>
+                </div>
+                <div class="rounded-2xl border border-white/10 bg-slate-900/80 px-4 py-3">
+                  <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                    Status
+                  </p>
+                  <p class="mt-2 text-lg font-semibold text-emerald-300">
+                    Aguarde...
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <Transition
+      enter-active-class="transition duration-300 ease-out"
+      enter-from-class="opacity-0"
+      enter-to-class="opacity-100"
+      leave-active-class="transition duration-200 ease-in"
+      leave-from-class="opacity-100"
+      leave-to-class="opacity-0"
+    >
+      <div
+        v-if="modalConfirmacaoImportacaoAberto"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/82 px-6 backdrop-blur-sm"
+        @click.self="modalConfirmacaoImportacaoAberto = false"
+      >
+        <div class="w-full max-w-lg rounded-[28px] border border-amber-400/20 bg-slate-950/95 p-8 shadow-[0_30px_120px_rgba(0,0,0,0.45)]">
+          <div class="space-y-6">
+            <div class="space-y-3">
+              <p class="text-xs font-semibold uppercase tracking-[0.28em] text-amber-300">
+                Confirmar nova importacao
+              </p>
+              <h2 class="text-2xl font-semibold text-white">
+                Isso vai substituir o trabalho atual.
+              </h2>
+              <p class="text-sm leading-7 text-slate-300">
+                Importar uma nova competencia limpa a base atual no inicio do fluxo. Se voce continuar, as classificacoes em andamento e os titulos carregados serao removidos para dar lugar aos dados do novo periodo.
+              </p>
+            </div>
+
+            <div class="grid gap-3 rounded-3xl border border-white/10 bg-white/[0.03] p-5 sm:grid-cols-3">
+              <div>
+                <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Competencia atual
+                </p>
+                <p class="mt-2 text-lg font-semibold text-white">
+                  {{ competenciaFormatada }}
+                </p>
+              </div>
+              <div>
+                <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Classificados
+                </p>
+                <p class="mt-2 text-lg font-semibold text-emerald-300">
+                  {{ totalClassificados }}
+                </p>
+              </div>
+              <div>
+                <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  Pendentes
+                </p>
+                <p class="mt-2 text-lg font-semibold text-amber-300">
+                  {{ totalPendentes }}
+                </p>
+              </div>
+            </div>
+
+            <div class="flex flex-col gap-3 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                class="inline-flex items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/[0.08]"
+                @click="modalConfirmacaoImportacaoAberto = false"
+              >
+                Continuar classificando
+              </button>
+              <button
+                type="button"
+                class="inline-flex items-center justify-center rounded-2xl border border-amber-400/30 bg-amber-400/15 px-5 py-3 text-sm font-semibold text-amber-100 transition hover:border-amber-300 hover:bg-amber-400/20"
+                @click="confirmarNovaImportacao"
+              >
+                Importar nova competencia
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </main>
 </template>
