@@ -17,6 +17,9 @@ useHead({
   title: 'Rateio de Despesas'
 })
 
+type SortKey = 'fornecedor' | 'historico' | 'data_vencimento' | 'data_pagamento' | 'valor_pago'
+type SortDirection = 'asc' | 'desc'
+
 const supabase = useSupabaseClient()
 
 const competenciaInput = ref(getCurrentCompetenciaInput())
@@ -32,6 +35,8 @@ const migrationAviso = ref('')
 const ultimaImportacao = ref<string | null>(null)
 const filtroHistoricosAberto = ref(false)
 const buscaHistorico = ref('')
+const sortKey = ref<SortKey>('valor_pago')
+const sortDirection = ref<SortDirection>('desc')
 
 const competenciaFormatada = computed(() => competenciaFromInput(competenciaInput.value))
 
@@ -71,26 +76,26 @@ const titulosFiltrados = computed(() => {
     ? titulos.value.filter((titulo) => historicosSelecionados.value.includes(normalizeText(titulo.historico)))
     : titulos.value
 
-  if (!termo) {
-    return base
-  }
+  const filtrados = !termo
+    ? base
+    : base.filter((titulo) => {
+      const categoria = titulo.categoriaCodigo ? RATEIO_CATEGORIAS_MAP[titulo.categoriaCodigo] : ''
+      const textoBase = [
+        titulo.fornecedor,
+        titulo.historico,
+        titulo.observacao,
+        titulo.complemento,
+        titulo.numero_titulo,
+        titulo.sufixo,
+        categoria
+      ]
+        .filter(Boolean)
+        .join(' ')
 
-  return base.filter((titulo) => {
-    const categoria = titulo.categoriaCodigo ? RATEIO_CATEGORIAS_MAP[titulo.categoriaCodigo] : ''
-    const textoBase = [
-      titulo.fornecedor,
-      titulo.historico,
-      titulo.observacao,
-      titulo.complemento,
-      titulo.numero_titulo,
-      titulo.sufixo,
-      categoria
-    ]
-      .filter(Boolean)
-      .join(' ')
+      return sanitizeSearch(textoBase).includes(termo)
+    })
 
-    return sanitizeSearch(textoBase).includes(termo)
-  })
+  return [...filtrados].sort(compareTitulos)
 })
 
 const totalTitulos = computed(() => titulos.value.length)
@@ -130,6 +135,58 @@ function getParcela(titulo: TituloPagoRow) {
 function resetMensagens() {
   erro.value = ''
   sucesso.value = ''
+}
+
+function compareTitulos(a: TituloListItem, b: TituloListItem) {
+  const directionFactor = sortDirection.value === 'asc' ? 1 : -1
+
+  switch (sortKey.value) {
+    case 'fornecedor':
+      return directionFactor * normalizeText(a.fornecedor).localeCompare(normalizeText(b.fornecedor), 'pt-BR')
+    case 'historico':
+      return directionFactor * normalizeText(a.historico).localeCompare(normalizeText(b.historico), 'pt-BR')
+    case 'data_vencimento':
+      return directionFactor * compareDates(a.data_vencimento, b.data_vencimento)
+    case 'data_pagamento':
+      return directionFactor * compareDates(getDataPagamento(a), getDataPagamento(b))
+    case 'valor_pago':
+      return directionFactor * ((Number(a.valor_pago ?? 0)) - (Number(b.valor_pago ?? 0)))
+    default:
+      return 0
+  }
+}
+
+function compareDates(a: string | null | undefined, b: string | null | undefined) {
+  const aTime = a ? new Date(a).getTime() : 0
+  const bTime = b ? new Date(b).getTime() : 0
+
+  return aTime - bTime
+}
+
+function getDefaultDirection(key: SortKey): SortDirection {
+  if (key === 'valor_pago') {
+    return 'desc'
+  }
+
+  return 'asc'
+}
+
+function toggleSort(key: SortKey) {
+  if (sortKey.value === key) {
+    sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc'
+    return
+  }
+
+  sortKey.value = key
+  sortDirection.value = getDefaultDirection(key)
+}
+
+function getSortIndicator(key: SortKey) {
+  if (sortKey.value !== key) {
+    return '↕'
+  }
+
+  return sortDirection.value === 'asc' ? '↑' : '↓'
 }
 
 function getHistoricoPrioridade(historico: string) {
@@ -734,13 +791,27 @@ onMounted(async () => {
             </div>
             <div class="overflow-x-auto">
               <table class="min-w-full text-left text-sm">
-                <thead class="bg-slate-800/90 text-slate-300">
+                    <thead class="bg-slate-800/90 text-slate-300">
                       <tr>
                         <th class="px-4 py-4 font-medium">
-                          Fornecedor
+                          <button
+                            type="button"
+                            class="inline-flex items-center gap-2 transition hover:text-white"
+                            @click="toggleSort('fornecedor')"
+                          >
+                            <span>Fornecedor</span>
+                            <span class="text-xs text-slate-500">{{ getSortIndicator('fornecedor') }}</span>
+                          </button>
                         </th>
                         <th class="px-4 py-4 font-medium">
-                          Historico
+                          <button
+                            type="button"
+                            class="inline-flex items-center gap-2 transition hover:text-white"
+                            @click="toggleSort('historico')"
+                          >
+                            <span>Historico</span>
+                            <span class="text-xs text-slate-500">{{ getSortIndicator('historico') }}</span>
+                          </button>
                         </th>
                         <th class="px-4 py-4 font-medium">
                           Observacao / Complemento
@@ -749,14 +820,35 @@ onMounted(async () => {
                           Parcela
                         </th>
                         <th class="px-4 py-4 font-medium">
-                          Vencimento
+                          <button
+                            type="button"
+                            class="inline-flex items-center gap-2 transition hover:text-white"
+                            @click="toggleSort('data_vencimento')"
+                          >
+                            <span>Vencimento</span>
+                            <span class="text-xs text-slate-500">{{ getSortIndicator('data_vencimento') }}</span>
+                          </button>
                         </th>
                         <th class="px-4 py-4 font-medium">
-                          Pagamento
+                          <button
+                            type="button"
+                            class="inline-flex items-center gap-2 transition hover:text-white"
+                            @click="toggleSort('data_pagamento')"
+                          >
+                            <span>Pagamento</span>
+                            <span class="text-xs text-slate-500">{{ getSortIndicator('data_pagamento') }}</span>
+                          </button>
                         </th>
-                    <th class="px-4 py-4 font-medium text-right">
-                      Valor pago
-                    </th>
+                        <th class="px-4 py-4 font-medium text-right">
+                          <button
+                            type="button"
+                            class="inline-flex items-center gap-2 transition hover:text-white"
+                            @click="toggleSort('valor_pago')"
+                          >
+                            <span>Valor pago</span>
+                            <span class="text-xs text-slate-500">{{ getSortIndicator('valor_pago') }}</span>
+                          </button>
+                        </th>
                     <th class="px-4 py-4 font-medium">
                       Destino
                     </th>
