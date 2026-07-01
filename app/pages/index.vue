@@ -462,7 +462,7 @@ function ajustarPaginacao() {
   }
 }
 
-async function carregarTitulos(exibirLoading = true) {
+async function carregarTitulos(exibirLoading = true, selecionarTodosOsHistoricos = false) {
   if (!competenciaFormatada.value) {
     erro.value = 'Selecione uma competencia valida.'
     return
@@ -529,6 +529,15 @@ async function carregarTitulos(exibirLoading = true) {
         revisaoStatus: categoriaSalva ? 'salva' : sugestao ? 'sugestao' : 'pendente'
       }
     })
+
+    if (selecionarTodosOsHistoricos) {
+      historicosSelecionados.value = [...new Set(
+        titulos.value
+          .map((titulo) => normalizeText(titulo.historico))
+          .filter((historico) => historico !== '-')
+      )]
+    }
+
     ajustarPaginacao()
   }
   catch (caughtError) {
@@ -561,7 +570,7 @@ async function importarTitulos() {
     etapaImportacao.value = 'Atualizando a lista de titulos...'
     detalheImportacao.value = 'Isso costuma levar so alguns instantes. Enquanto finalizamos, pode pegar uma agua ou um cafe.'
 
-    await carregarTitulos(false)
+    await carregarTitulos(false, true)
 
     ultimaImportacao.value = new Intl.DateTimeFormat('pt-BR', {
       dateStyle: 'short',
@@ -884,7 +893,7 @@ onMounted(async () => {
     ultimaImportacao.value = ultimaImportacaoSalva
   }
 
-  await carregarTitulos()
+  await carregarTitulos(true, true)
   telaInicializada.value = true
 })
 
@@ -903,7 +912,7 @@ watch(competenciaInput, async (value, oldValue) => {
     return
   }
 
-  await carregarTitulos()
+  await carregarTitulos(true, true)
 })
 
 watch([busca, historicosSelecionados, filtroClassificacao], () => {
