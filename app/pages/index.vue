@@ -3,7 +3,7 @@ import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
 
 import { RATEIO_CATEGORIAS, RATEIO_CATEGORIAS_MAP, type RateioCategoriaCodigo } from '../constants/rateioCategorias'
-import type { ImportacaoTitulosApiResponse, TituloClassificacaoRow, TituloListItem, TituloPagoRow } from '../types/financeiro'
+import type { ImportacaoTitulosApiResponse, RateioHistoricoRow, TituloClassificacaoRow, TituloListItem, TituloPagoRow } from '../types/financeiro'
 import {
   competenciaFromInput,
   formatCurrencyBRL,
@@ -17,9 +17,6 @@ useHead({
   title: 'Rateio de Despesas'
 })
 
-type SortKey = 'fornecedor' | 'historico' | 'data_vencimento' | 'data_pagamento' | 'valor_pago'
-type SortDirection = 'asc' | 'desc'
-
 const LOCAL_STORAGE_COMPETENCIA_KEY = 'rateio_despesas_competencia'
 const LOCAL_STORAGE_ULTIMA_IMPORTACAO_KEY = 'rateio_despesas_ultima_importacao'
 const TITULOS_BATCH_SIZE = 1000
@@ -29,8 +26,10 @@ const supabase = useSupabaseClient()
 
 const competenciaInput = ref(getCurrentCompetenciaInput())
 const busca = ref('')
+const filtroClassificacao = ref<'todos' | 'sugestoes' | 'pendentes'>('todos')
 const historicosSelecionados = ref<string[]>([])
 const titulos = ref<TituloListItem[]>([])
+const historicoClassificacoes = ref<RateioHistoricoRow[]>([])
 const carregando = ref(false)
 const importando = ref(false)
 const salvando = ref(false)
@@ -40,8 +39,6 @@ const migrationAviso = ref('')
 const ultimaImportacao = ref<string | null>(null)
 const filtroHistoricosAberto = ref(false)
 const buscaHistorico = ref('')
-const sortKey = ref<SortKey>('valor_pago')
-const sortDirection = ref<SortDirection>('desc')
 const categoriaAbertaId = ref<number | null>(null)
 const etapaImportacao = ref('Preparando a importacao...')
 const detalheImportacao = ref('Estamos organizando a base para carregar os titulos da competencia selecionada.')
@@ -81,7 +78,7 @@ const historicosFiltrados = computed(() => {
   return historicosDisponiveis.value.filter((historico) => sanitizeSearch(historico).includes(termo))
 })
 
-const titulosFiltrados = computed(() => {
+const titulosFiltradosBase = computed(() => {
   const termo = sanitizeSearch(busca.value)
 
   const base = historicosSelecionados.value.length
@@ -93,6 +90,7 @@ const titulosFiltrados = computed(() => {
     : base.filter((titulo) => {
       const categoria = titulo.categoriaCodigo ? RATEIO_CATEGORIAS_MAP[titulo.categoriaCodigo] : ''
       const textoBase = [
+        titulo.filial,
         titulo.fornecedor,
         titulo.historico,
         titulo.observacao,
@@ -110,10 +108,31 @@ const titulosFiltrados = computed(() => {
   return [...filtrados].sort(compareTitulos)
 })
 
+const titulosFiltrados = computed(() => {
+  if (filtroClassificacao.value === 'sugestoes') {
+    return titulosFiltradosBase.value.filter((titulo) => titulo.categoriaOrigem === 'sugerida')
+  }
+
+  if (filtroClassificacao.value === 'pendentes') {
+    return titulosFiltradosBase.value.filter((titulo) => !titulo.categoriaCodigo)
+  }
+
+  return titulosFiltradosBase.value
+})
+
 const totalTitulos = computed(() => titulos.value.length)
 const totalClassificados = computed(() => titulos.value.filter((titulo) => !!titulo.categoriaCodigo).length)
+const totalSugeridos = computed(() => titulos.value.filter((titulo) => titulo.categoriaOrigem === 'sugerida').length)
 const totalPendentes = computed(() => totalTitulos.value - totalClassificados.value)
-const valorTotalPago = computed(() => titulos.value.reduce((total, titulo) => total + Number(titulo.valor_pago ?? 0), 0))
+const titulosResumo = computed(() => historicosSelecionados.value.length
+  ? titulos.value.filter((titulo) => historicosSelecionados.value.includes(normalizeText(titulo.historico)))
+  : titulos.value
+)
+const totalTitulosResumo = computed(() => titulosResumo.value.length)
+const totalClassificadosResumo = computed(() => titulosResumo.value.filter((titulo) => !!titulo.categoriaCodigo).length)
+const totalSugeridosResumo = computed(() => titulosResumo.value.filter((titulo) => titulo.categoriaOrigem === 'sugerida').length)
+const totalPendentesResumo = computed(() => totalTitulosResumo.value - totalClassificadosResumo.value)
+const valorTotalPagoResumo = computed(() => titulosResumo.value.reduce((total, titulo) => total + Number(titulo.valor_pago ?? 0), 0))
 const totalPaginas = computed(() => Math.max(1, Math.ceil(titulosFiltrados.value.length / TITULOS_POR_PAGINA)))
 const titulosPaginados = computed(() => {
   const inicio = (paginaAtual.value - 1) * TITULOS_POR_PAGINA
@@ -128,10 +147,26 @@ const paginaInicial = computed(() => {
 })
 const paginaFinal = computed(() => Math.min(paginaAtual.value * TITULOS_POR_PAGINA, titulosFiltrados.value.length))
 const paginaAtualCompleta = computed(() => titulosPaginados.value.every((titulo) => !!titulo.categoriaCodigo))
+const pendentesPaginaAtual = computed(() => titulosPaginados.value.filter((titulo) => !titulo.categoriaCodigo).length)
+const categoriasOrdenadasPorUso = computed(() => {
+  const frequencias = new Map<RateioCategoriaCodigo, number>()
+
+  for (const registro of historicoClassificacoes.value) {
+    frequencias.set(registro.categoria_codigo, (frequencias.get(registro.categoria_codigo) ?? 0) + 1)
+  }
+
+  return RATEIO_CATEGORIAS
+    .map((categoria, indiceOriginal) => ({
+      ...categoria,
+      frequencia: frequencias.get(categoria.codigo) ?? 0,
+      indiceOriginal
+    }))
+    .sort((a, b) => b.frequencia - a.frequencia || a.indiceOriginal - b.indiceOriginal)
+})
 
 const gruposRelatorio = computed(() =>
   RATEIO_CATEGORIAS.map((categoria) => {
-    const itens = titulosFiltrados.value.filter((titulo) => titulo.categoriaCodigo === categoria.codigo)
+    const itens = titulosFiltradosBase.value.filter((titulo) => titulo.categoriaCodigo === categoria.codigo)
     const total = itens.reduce((accumulator, item) => accumulator + Number(item.valor_pago ?? 0), 0)
 
     return {
@@ -164,22 +199,10 @@ function resetMensagens() {
 }
 
 function compareTitulos(a: TituloListItem, b: TituloListItem) {
-  const directionFactor = sortDirection.value === 'asc' ? 1 : -1
-
-  switch (sortKey.value) {
-    case 'fornecedor':
-      return directionFactor * normalizeText(a.fornecedor).localeCompare(normalizeText(b.fornecedor), 'pt-BR')
-    case 'historico':
-      return directionFactor * normalizeText(a.historico).localeCompare(normalizeText(b.historico), 'pt-BR')
-    case 'data_vencimento':
-      return directionFactor * compareDates(a.data_vencimento, b.data_vencimento)
-    case 'data_pagamento':
-      return directionFactor * compareDates(getDataPagamento(a), getDataPagamento(b))
-    case 'valor_pago':
-      return directionFactor * ((Number(a.valor_pago ?? 0)) - (Number(b.valor_pago ?? 0)))
-    default:
-      return 0
-  }
+  return normalizeText(a.fornecedor).localeCompare(normalizeText(b.fornecedor), 'pt-BR')
+    || normalizeText(a.historico).localeCompare(normalizeText(b.historico), 'pt-BR')
+    || compareDates(a.data_vencimento, b.data_vencimento)
+    || a.id - b.id
 }
 
 function compareDates(a: string | null | undefined, b: string | null | undefined) {
@@ -187,32 +210,6 @@ function compareDates(a: string | null | undefined, b: string | null | undefined
   const bTime = b ? new Date(b).getTime() : 0
 
   return aTime - bTime
-}
-
-function getDefaultDirection(key: SortKey): SortDirection {
-  if (key === 'valor_pago') {
-    return 'desc'
-  }
-
-  return 'asc'
-}
-
-function toggleSort(key: SortKey) {
-  if (sortKey.value === key) {
-    sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc'
-    return
-  }
-
-  sortKey.value = key
-  sortDirection.value = getDefaultDirection(key)
-}
-
-function getSortIndicator(key: SortKey) {
-  if (sortKey.value !== key) {
-    return '↕'
-  }
-
-  return sortDirection.value === 'asc' ? '↑' : '↓'
 }
 
 function getHistoricoPrioridade(historico: string) {
@@ -259,8 +256,97 @@ function alternarCategoriaAberta(tituloId: number) {
 
 function selecionarCategoria(titulo: TituloListItem, categoriaCodigo: RateioCategoriaCodigo | null) {
   titulo.categoriaCodigo = categoriaCodigo
+  titulo.categoriaOrigem = categoriaCodigo ? 'salva' : null
+  titulo.sugestaoConfianca = null
   categoriaAbertaId.value = null
   classificacoesPendentes.value = true
+}
+
+function getTextoComparavel(value: string | null | undefined) {
+  return sanitizeSearch(value ?? '')
+}
+
+function getChavesHistorico(item: Pick<TituloPagoRow, 'fornecedor' | 'historico' | 'observacao' | 'complemento'>) {
+  const fornecedor = getTextoComparavel(item.fornecedor)
+  const historico = getTextoComparavel(item.historico)
+  const observacao = getTextoComparavel(item.observacao)
+  const complemento = getTextoComparavel(item.complemento)
+
+  return {
+    completa: [fornecedor, historico, observacao, complemento].join('|'),
+    fornecedorHistorico: [fornecedor, historico].join('|'),
+    fornecedor,
+    historico
+  }
+}
+
+function isHistoricoGenerico(historico: string) {
+  return historico === 'pagamento fornecedor'
+    || historico === 'pagamento de fornecedor'
+}
+
+function getMelhorCategoria(registros: RateioHistoricoRow[], minimoOcorrencias: number, minimoConfianca: number) {
+  if (registros.length < minimoOcorrencias) {
+    return null
+  }
+
+  const contagem = new Map<RateioCategoriaCodigo, number>()
+
+  for (const registro of registros) {
+    contagem.set(registro.categoria_codigo, (contagem.get(registro.categoria_codigo) ?? 0) + 1)
+  }
+
+  const [categoria, ocorrencias] = [...contagem.entries()].sort((a, b) => b[1] - a[1])[0] ?? []
+  const confianca = ocorrencias ? ocorrencias / registros.length : 0
+
+  if (!categoria || confianca < minimoConfianca) {
+    return null
+  }
+
+  return { categoria, confianca }
+}
+
+function sugerirCategoria(titulo: TituloPagoRow, historicoRateio: RateioHistoricoRow[]) {
+  const chavesTitulo = getChavesHistorico(titulo)
+  const chavesRegistros = historicoRateio.map((registro) => ({
+    registro,
+    chaves: getChavesHistorico(registro)
+  }))
+
+  const correspondenciaCompleta = chavesRegistros
+    .filter(({ chaves }) => chaves.completa === chavesTitulo.completa)
+    .map(({ registro }) => registro)
+  const sugestaoCompleta = getMelhorCategoria(correspondenciaCompleta, 1, 0.8)
+
+  if (sugestaoCompleta) {
+    return sugestaoCompleta
+  }
+
+  const correspondenciaFornecedorHistorico = chavesRegistros
+    .filter(({ chaves }) => chaves.fornecedorHistorico === chavesTitulo.fornecedorHistorico)
+    .map(({ registro }) => registro)
+  const sugestaoFornecedorHistorico = getMelhorCategoria(correspondenciaFornecedorHistorico, 2, 0.8)
+
+  if (sugestaoFornecedorHistorico) {
+    return sugestaoFornecedorHistorico
+  }
+
+  if (chavesTitulo.historico && !isHistoricoGenerico(chavesTitulo.historico)) {
+    const correspondenciaHistorico = chavesRegistros
+      .filter(({ chaves }) => chaves.historico === chavesTitulo.historico)
+      .map(({ registro }) => registro)
+    const sugestaoHistorico = getMelhorCategoria(correspondenciaHistorico, 2, 0.9)
+
+    if (sugestaoHistorico) {
+      return sugestaoHistorico
+    }
+  }
+
+  const correspondenciaFornecedor = chavesRegistros
+    .filter(({ chaves }) => chaves.fornecedor === chavesTitulo.fornecedor)
+    .map(({ registro }) => registro)
+
+  return getMelhorCategoria(correspondenciaFornecedor, 3, 0.9)
 }
 
 function shouldOpenCategoriaAcima(index: number, totalItens: number) {
@@ -275,7 +361,17 @@ async function irParaPagina(page: number) {
   }
 
   if (paginaDestino > paginaAtual.value && !paginaAtualCompleta.value) {
-    erro.value = 'Classifique todos os titulos desta pagina antes de continuar.'
+    const primeiroPendente = titulosPaginados.value.find((titulo) => !titulo.categoriaCodigo)
+    erro.value = `Ainda ${pendentesPaginaAtual.value} titulo(s) sem destino nesta pagina. Confira o item destacado.`
+
+    if (primeiroPendente && import.meta.client) {
+      await nextTick()
+      document.getElementById(`titulo-${primeiroPendente.id}`)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center'
+      })
+    }
+
     return
   }
 
@@ -327,7 +423,7 @@ async function carregarTodosTitulos(startIso: string, endIso: string) {
   while (true) {
     const { data, error } = await supabase
       .from('titulos_financeiros_pagos')
-      .select('id, fornecedor, historico, observacao, complemento, sufixo, numero_titulo, valor_pago, data_vencimento, data_baixa, data_ultimo_pagamento')
+      .select('id, filial, fornecedor, historico, observacao, complemento, sufixo, numero_titulo, valor_pago, data_vencimento, data_baixa, data_ultimo_pagamento')
       .gte('data_baixa', startIso)
       .lt('data_baixa', endIso)
       .order('data_baixa', { ascending: true })
@@ -349,6 +445,33 @@ async function carregarTodosTitulos(startIso: string, endIso: string) {
   }
 
   return todosTitulos
+}
+
+async function carregarTodoHistorico() {
+  const todoHistorico: RateioHistoricoRow[] = []
+  let from = 0
+
+  while (true) {
+    const { data, error } = await supabase
+      .from('rateio_historico_classificacoes')
+      .select('titulo_origem_id, competencia, filial, fornecedor, historico, observacao, complemento, categoria_codigo')
+      .range(from, from + TITULOS_BATCH_SIZE - 1)
+
+    if (error) {
+      throw error
+    }
+
+    const lote = (data as RateioHistoricoRow[] | null) ?? []
+    todoHistorico.push(...lote)
+
+    if (lote.length < TITULOS_BATCH_SIZE) {
+      break
+    }
+
+    from += TITULOS_BATCH_SIZE
+  }
+
+  return todoHistorico
 }
 
 function ajustarPaginacao() {
@@ -398,10 +521,35 @@ async function carregarTitulos(exibirLoading = true) {
       classificacaoMap.set(classificacao.titulo_pago_id, classificacao.categoria_codigo)
     }
 
-    titulos.value = ((data as TituloPagoRow[] | null) ?? []).map((titulo) => ({
-      ...titulo,
-      categoriaCodigo: classificacaoMap.get(titulo.id) ?? null
-    }))
+    let historicoRateio: RateioHistoricoRow[] = []
+
+    try {
+      historicoRateio = await carregarTodoHistorico()
+      historicoClassificacoes.value = historicoRateio
+    }
+    catch (historicoError) {
+      historicoClassificacoes.value = []
+      const message = getErrorMessage(historicoError, '')
+
+      if (isMissingTableError(message)) {
+        migrationAviso.value = 'A memoria de classificacoes ainda nao existe. Rode a migration de 30/06/2026 no Supabase para ativar as sugestoes automaticas.'
+      }
+      else {
+        throw historicoError
+      }
+    }
+
+    titulos.value = ((data as TituloPagoRow[] | null) ?? []).map((titulo) => {
+      const categoriaSalva = classificacaoMap.get(titulo.id)
+      const sugestao = categoriaSalva ? null : sugerirCategoria(titulo, historicoRateio)
+
+      return {
+        ...titulo,
+        categoriaCodigo: categoriaSalva ?? sugestao?.categoria ?? null,
+        categoriaOrigem: categoriaSalva ? 'salva' : sugestao ? 'sugerida' : null,
+        sugestaoConfianca: sugestao?.confianca ?? null
+      }
+    })
     classificacoesPendentes.value = false
     ajustarPaginacao()
   }
@@ -482,6 +630,19 @@ async function salvarClassificacoes(silencioso = false) {
 
     const idsSemCategoria = titulos.value.filter((titulo) => !titulo.categoriaCodigo).map((titulo) => titulo.id)
 
+    const memoriaClassificacoes = titulos.value
+      .filter((titulo): titulo is TituloListItem & { categoriaCodigo: RateioCategoriaCodigo } => !!titulo.categoriaCodigo)
+      .map((titulo) => ({
+        titulo_origem_id: titulo.id,
+        competencia: competenciaFormatada.value,
+        filial: titulo.filial,
+        fornecedor: titulo.fornecedor,
+        historico: titulo.historico,
+        observacao: titulo.observacao,
+        complemento: titulo.complemento,
+        categoria_codigo: titulo.categoriaCodigo
+      }))
+
     if (classificacoes.length > 0) {
       const { error } = await supabase
         .from('titulo_pago_classificacoes')
@@ -498,6 +659,28 @@ async function salvarClassificacoes(silencioso = false) {
         .delete()
         .eq('competencia', competenciaFormatada.value)
         .in('titulo_pago_id', idsSemCategoria)
+
+      if (error) {
+        throw error
+      }
+    }
+
+    if (memoriaClassificacoes.length > 0) {
+      const { error } = await supabase
+        .from('rateio_historico_classificacoes')
+        .upsert(memoriaClassificacoes, { onConflict: 'competencia,titulo_origem_id' })
+
+      if (error) {
+        throw error
+      }
+    }
+
+    if (idsSemCategoria.length > 0) {
+      const { error } = await supabase
+        .from('rateio_historico_classificacoes')
+        .delete()
+        .eq('competencia', competenciaFormatada.value)
+        .in('titulo_origem_id', idsSemCategoria)
 
       if (error) {
         throw error
@@ -531,28 +714,31 @@ function exportarPdf() {
   resetMensagens()
 
   const doc = new jsPDF({
+    orientation: 'landscape',
     unit: 'pt',
     format: 'a4'
   })
 
   const marginX = 40
+  const pageWidth = doc.internal.pageSize.getWidth()
+  const pageHeight = doc.internal.pageSize.getHeight()
   const generatedAt = new Intl.DateTimeFormat('pt-BR', {
     dateStyle: 'short',
     timeStyle: 'short'
   }).format(new Date())
 
   doc.setFillColor(7, 11, 34)
-  doc.rect(0, 0, doc.internal.pageSize.getWidth(), 110, 'F')
+  doc.rect(0, 0, pageWidth, 96, 'F')
   doc.setTextColor(255, 255, 255)
-  doc.setFontSize(24)
-  doc.text('Relatorio de Rateio de Despesas', marginX, 48)
+  doc.setFontSize(23)
+  doc.text('Relatorio de Rateio de Despesas', marginX, 42)
   doc.setFontSize(11)
-  doc.text(`Competencia: ${competenciaFormatada.value}`, marginX, 72)
-  doc.text(`Gerado em: ${generatedAt}`, marginX, 90)
+  doc.text(`Competencia: ${competenciaFormatada.value}`, marginX, 65)
+  doc.text(`Gerado em: ${generatedAt}`, marginX, 82)
 
   autoTable(doc, {
-    startY: 135,
-    margin: { left: marginX, right: marginX },
+    startY: 116,
+    margin: { top: 40, right: marginX, bottom: 44, left: marginX },
     theme: 'grid',
     head: [['Categoria', 'Titulos', 'Valor total']],
     body: gruposRelatorio.value.map((grupo) => [
@@ -573,12 +759,12 @@ function exportarPdf() {
     }
   })
 
-  let currentY = ((doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? 170) + 28
+  let currentY = ((doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? 150) + 26
 
   for (const grupo of gruposRelatorio.value) {
-    if (currentY > 660) {
+    if (currentY > pageHeight - 105) {
       doc.addPage()
-      currentY = 50
+      currentY = 42
     }
 
     doc.setTextColor(15, 23, 42)
@@ -587,10 +773,13 @@ function exportarPdf() {
 
     autoTable(doc, {
       startY: currentY + 14,
-      margin: { left: marginX, right: marginX },
+      margin: { top: 40, right: marginX, bottom: 44, left: marginX },
       theme: 'striped',
-      head: [['Fornecedor', 'Historico', 'Parcela', 'Vencimento', 'Pagamento', 'Valor pago']],
+      showHead: 'everyPage',
+      rowPageBreak: 'avoid',
+      head: [['Filial', 'Fornecedor', 'Historico / detalhes', 'Parcela', 'Vencimento', 'Pagamento', 'Valor pago']],
       body: grupo.itens.map((titulo) => [
+        normalizeText(titulo.filial),
         normalizeText(titulo.fornecedor),
         [normalizeText(titulo.historico), normalizeText(titulo.observacao), normalizeText(titulo.complemento)]
           .filter((value) => value !== '-')
@@ -611,16 +800,29 @@ function exportarPdf() {
         textColor: [255, 255, 255]
       },
       columnStyles: {
-        0: { cellWidth: 105 },
-        1: { cellWidth: 175 },
-        2: { cellWidth: 55 },
-        3: { cellWidth: 60 },
-        4: { cellWidth: 60 },
-        5: { cellWidth: 75, halign: 'right' }
+        0: { cellWidth: 90 },
+        1: { cellWidth: 135 },
+        2: { cellWidth: 250 },
+        3: { cellWidth: 50 },
+        4: { cellWidth: 70 },
+        5: { cellWidth: 70 },
+        6: { cellWidth: 97, halign: 'right' }
       }
     })
 
     currentY = ((doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? currentY) + 28
+  }
+
+  const totalPages = doc.getNumberOfPages()
+
+  for (let page = 1; page <= totalPages; page += 1) {
+    doc.setPage(page)
+    doc.setDrawColor(226, 232, 240)
+    doc.line(marginX, pageHeight - 31, pageWidth - marginX, pageHeight - 31)
+    doc.setFontSize(8.5)
+    doc.setTextColor(100, 116, 139)
+    doc.text(`Competencia ${competenciaFormatada.value}`, marginX, pageHeight - 16)
+    doc.text(`Pagina ${page} de ${totalPages}`, pageWidth - marginX, pageHeight - 16, { align: 'right' })
   }
 
   doc.save(`relatorio-rateio-${competenciaFormatada.value.replace('/', '-')}.pdf`)
@@ -640,6 +842,10 @@ function isMissingTableError(message: string) {
 function getErrorMessage(error: unknown, fallback: string) {
   if (error instanceof Error) {
     return error.message || fallback
+  }
+
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    return String((error as { message?: string }).message || fallback)
   }
 
   if (typeof error === 'object' && error !== null && 'data' in error) {
@@ -689,7 +895,7 @@ watch(competenciaInput, async (value, oldValue) => {
   await carregarTitulos()
 })
 
-watch([busca, historicosSelecionados], () => {
+watch([busca, historicosSelecionados, filtroClassificacao], () => {
   paginaAtual.value = 1
 }, { deep: true })
 
@@ -703,7 +909,7 @@ watch(totalPaginas, () => {
     <div class="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.16),_transparent_25%),radial-gradient(circle_at_bottom_right,_rgba(14,165,233,0.18),_transparent_30%)]" />
     <div class="absolute inset-0 bg-[linear-gradient(rgba(148,163,184,0.07)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.07)_1px,transparent_1px)] bg-[size:42px_42px] opacity-20" />
 
-    <div class="relative mx-auto flex max-w-7xl flex-col gap-8 px-6 py-10 lg:px-10">
+    <div class="relative mx-auto flex w-full max-w-[1920px] flex-col gap-8 px-3 py-10 sm:px-5 lg:px-6">
       <section class="rounded-[28px] border border-white/10 bg-slate-950/65 p-8 shadow-[0_30px_120px_rgba(0,0,0,0.35)] backdrop-blur">
         <div class="flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
           <div class="max-w-3xl space-y-4">
@@ -808,25 +1014,30 @@ watch(totalPaginas, () => {
         {{ migrationAviso }}
       </div>
 
-      <section class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <section class="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <AppStatCard
-          label="Titulos carregados"
-          :value="String(totalTitulos)"
+          :label="historicosSelecionados.length ? 'Titulos no filtro' : 'Titulos carregados'"
+          :value="String(totalTitulosResumo)"
           tone="emerald"
         />
         <AppStatCard
           label="Classificados"
-          :value="String(totalClassificados)"
+          :value="String(totalClassificadosResumo)"
           tone="sky"
         />
         <AppStatCard
           label="Pendentes"
-          :value="String(totalPendentes)"
+          :value="String(totalPendentesResumo)"
           tone="amber"
         />
         <AppStatCard
+          label="Sugeridos pelo historico"
+          :value="String(totalSugeridosResumo)"
+          tone="sky"
+        />
+        <AppStatCard
           label="Valor total pago"
-          :value="formatCurrencyBRL(valorTotalPago)"
+          :value="formatCurrencyBRL(valorTotalPagoResumo)"
           tone="rose"
         />
       </section>
@@ -938,6 +1149,39 @@ watch(totalPaginas, () => {
             </div>
           </div>
 
+          <div class="flex flex-wrap items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/60 p-1.5 sm:w-fit">
+            <button
+              type="button"
+              class="rounded-xl px-4 py-2 text-sm font-semibold transition"
+              :class="filtroClassificacao === 'todos'
+                ? 'bg-white/10 text-white shadow-sm'
+                : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'"
+              @click="filtroClassificacao = 'todos'"
+            >
+              Todos <span class="ml-1 text-xs opacity-70">{{ totalTitulosResumo }}</span>
+            </button>
+            <button
+              type="button"
+              class="rounded-xl px-4 py-2 text-sm font-semibold transition"
+              :class="filtroClassificacao === 'sugestoes'
+                ? 'bg-sky-400/15 text-sky-200 shadow-sm'
+                : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'"
+              @click="filtroClassificacao = 'sugestoes'"
+            >
+              Sugestoes <span class="ml-1 text-xs opacity-70">{{ totalSugeridosResumo }}</span>
+            </button>
+            <button
+              type="button"
+              class="rounded-xl px-4 py-2 text-sm font-semibold transition"
+              :class="filtroClassificacao === 'pendentes'
+                ? 'bg-amber-400/15 text-amber-200 shadow-sm'
+                : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'"
+              @click="filtroClassificacao = 'pendentes'"
+            >
+              Pendentes <span class="ml-1 text-xs opacity-70">{{ totalPendentesResumo }}</span>
+            </button>
+          </div>
+
           <div
             v-if="carregando"
             class="rounded-2xl border border-sky-500/20 bg-sky-500/10 px-5 py-12 text-center text-sm text-sky-100"
@@ -956,6 +1200,12 @@ watch(totalPaginas, () => {
             v-else
             class="overflow-hidden rounded-3xl border border-white/10 bg-slate-900/70"
           >
+            <div
+              v-if="totalSugeridos"
+              class="border-b border-sky-400/20 bg-sky-400/10 px-4 py-3 text-sm text-sky-100"
+            >
+              O historico sugeriu {{ totalSugeridos }} categoria(s). Confira os itens marcados e clique em salvar para confirmar.
+            </div>
             <div class="border-b border-white/10 bg-slate-900/90 px-4 py-3 text-sm text-slate-300">
               Exibindo
               <span class="font-semibold text-white">{{ paginaInicial }}</span>
@@ -967,40 +1217,36 @@ watch(totalPaginas, () => {
               <span v-if="historicosSelecionados.length">
                 com filtro de historico aplicado
               </span>
+              <span
+                v-if="pendentesPaginaAtual"
+                class="ml-2 rounded-full border border-amber-400/30 bg-amber-400/10 px-2.5 py-1 font-semibold text-amber-200"
+              >
+                {{ pendentesPaginaAtual }} pendente(s) nesta pagina
+              </span>
             </div>
             <div class="overflow-x-auto xl:overflow-visible">
-              <table class="min-w-full table-fixed text-left text-sm">
+              <table class="w-full table-fixed text-left text-sm">
                 <colgroup>
-                  <col class="w-[14%]">
-                  <col class="w-[12%]">
-                  <col class="w-[18%]">
+                  <col class="w-[10%]">
+                  <col class="w-[13%]">
+                  <col class="w-[11%]">
+                  <col class="w-[16%]">
                   <col class="w-[6%]">
-                  <col class="w-[9%]">
-                  <col class="w-[9%]">
                   <col class="w-[8%]">
-                  <col class="w-[24%]">
+                  <col class="w-[8%]">
+                  <col class="w-[9%]">
+                  <col class="w-[19%]">
                 </colgroup>
                 <thead class="bg-slate-800/90 text-slate-300">
                   <tr>
                         <th class="px-4 py-4 font-medium">
-                          <button
-                            type="button"
-                            class="inline-flex items-center gap-2 transition hover:text-white"
-                            @click="toggleSort('fornecedor')"
-                          >
-                            <span>Fornecedor</span>
-                            <span class="text-xs text-slate-500">{{ getSortIndicator('fornecedor') }}</span>
-                          </button>
+                          Filial
                         </th>
                         <th class="px-4 py-4 font-medium">
-                          <button
-                            type="button"
-                            class="inline-flex items-center gap-2 transition hover:text-white"
-                            @click="toggleSort('historico')"
-                          >
-                            <span>Historico</span>
-                            <span class="text-xs text-slate-500">{{ getSortIndicator('historico') }}</span>
-                          </button>
+                          Fornecedor (A-Z)
+                        </th>
+                        <th class="px-4 py-4 font-medium">
+                          Historico
                         </th>
                         <th class="px-4 py-4 font-medium">
                           Observacao / Complemento
@@ -1009,34 +1255,13 @@ watch(totalPaginas, () => {
                           Parcela
                         </th>
                         <th class="px-4 py-4 font-medium">
-                          <button
-                            type="button"
-                            class="inline-flex items-center gap-2 transition hover:text-white"
-                            @click="toggleSort('data_vencimento')"
-                          >
-                            <span>Vencimento</span>
-                            <span class="text-xs text-slate-500">{{ getSortIndicator('data_vencimento') }}</span>
-                          </button>
+                          Vencimento
                         </th>
                         <th class="px-4 py-4 font-medium">
-                          <button
-                            type="button"
-                            class="inline-flex items-center gap-2 transition hover:text-white"
-                            @click="toggleSort('data_pagamento')"
-                          >
-                            <span>Pagamento</span>
-                            <span class="text-xs text-slate-500">{{ getSortIndicator('data_pagamento') }}</span>
-                          </button>
+                          Pagamento
                         </th>
                         <th class="px-4 py-4 font-medium text-right">
-                          <button
-                            type="button"
-                            class="inline-flex items-center gap-2 transition hover:text-white"
-                            @click="toggleSort('valor_pago')"
-                          >
-                            <span>Valor pago</span>
-                            <span class="text-xs text-slate-500">{{ getSortIndicator('valor_pago') }}</span>
-                          </button>
+                          Valor pago
                         </th>
                     <th class="px-4 py-4 font-medium">
                       Destino
@@ -1047,9 +1272,16 @@ watch(totalPaginas, () => {
                 <tbody class="divide-y divide-white/10 text-slate-100">
                   <tr
                     v-for="(titulo, index) in titulosPaginados"
+                    :id="`titulo-${titulo.id}`"
                     :key="titulo.id"
-                    class="align-top transition hover:bg-white/[0.03]"
+                    class="align-top transition"
+                    :class="titulo.categoriaCodigo
+                      ? 'hover:bg-white/[0.03]'
+                      : 'bg-amber-400/[0.08] shadow-[inset_4px_0_0_rgba(251,191,36,0.85)] hover:bg-amber-400/[0.12]'"
                   >
+                    <td class="px-4 py-4 text-slate-300 break-words">
+                      {{ normalizeText(titulo.filial) }}
+                    </td>
                     <td class="px-4 py-4 font-medium text-white break-words">
                       {{ normalizeText(titulo.fornecedor) }}
                     </td>
@@ -1098,6 +1330,27 @@ watch(totalPaginas, () => {
                         </button>
 
                         <div
+                          v-if="!titulo.categoriaCodigo"
+                          class="mt-2"
+                        >
+                          <span class="rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-1 text-xs font-semibold text-amber-200">
+                            Destino pendente
+                          </span>
+                        </div>
+
+                        <div
+                          v-if="titulo.categoriaOrigem === 'sugerida'"
+                          class="mt-2 flex items-center gap-2 text-xs text-sky-300"
+                        >
+                          <span class="rounded-full border border-sky-400/30 bg-sky-400/10 px-2 py-1 font-medium">
+                            Sugestao do historico
+                          </span>
+                          <span v-if="titulo.sugestaoConfianca">
+                            {{ Math.round(titulo.sugestaoConfianca * 100) }}%
+                          </span>
+                        </div>
+
+                        <div
                           v-if="categoriaAbertaId === titulo.id"
                           class="absolute right-0 z-30 w-[320px] max-w-[min(90vw,360px)] overflow-hidden rounded-2xl border border-white/10 bg-slate-950/95 shadow-2xl shadow-black/30 backdrop-blur"
                           :class="shouldOpenCategoriaAcima(index, titulosPaginados.length) ? 'bottom-[calc(100%+0.5rem)]' : 'top-[calc(100%+0.5rem)]'"
@@ -1111,14 +1364,22 @@ watch(totalPaginas, () => {
                               Selecione
                             </button>
                             <button
-                              v-for="categoria in RATEIO_CATEGORIAS"
+                              v-for="categoria in categoriasOrdenadasPorUso"
                               :key="categoria.codigo"
                               type="button"
                               class="flex w-full rounded-xl px-3 py-2.5 text-left text-sm leading-5 text-slate-200 transition hover:bg-white/[0.06]"
                               :class="titulo.categoriaCodigo === categoria.codigo ? 'bg-emerald-400/10 text-emerald-200' : ''"
                               @click="selecionarCategoria(titulo, categoria.codigo)"
                             >
-                              {{ categoria.label }}
+                              <span class="flex w-full items-center justify-between gap-3">
+                                <span>{{ categoria.label }}</span>
+                                <span
+                                  v-if="categoria.frequencia"
+                                  class="shrink-0 text-xs text-slate-500"
+                                >
+                                  {{ categoria.frequencia }}x
+                                </span>
+                              </span>
                             </button>
                           </div>
                         </div>

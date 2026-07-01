@@ -2,6 +2,7 @@ import type { RateioCategoriaCodigo } from '../constants/rateioCategorias'
 
 export interface TituloPagoRow {
   id: number
+  filial: string | null
   fornecedor: string | null
   historico: string | null
   observacao: string | null
@@ -22,6 +23,19 @@ export interface TituloClassificacaoRow {
 
 export interface TituloListItem extends TituloPagoRow {
   categoriaCodigo: RateioCategoriaCodigo | null
+  categoriaOrigem: 'salva' | 'sugerida' | null
+  sugestaoConfianca: number | null
+}
+
+export interface RateioHistoricoRow {
+  titulo_origem_id: number
+  competencia: string
+  filial: string | null
+  fornecedor: string | null
+  historico: string | null
+  observacao: string | null
+  complemento: string | null
+  categoria_codigo: RateioCategoriaCodigo
 }
 
 export interface ImportacaoTitulosWebhookResponse {
