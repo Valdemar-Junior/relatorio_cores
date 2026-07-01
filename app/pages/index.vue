@@ -45,6 +45,11 @@ const detalheImportacao = ref('Estamos organizando a base para carregar os titul
 const paginaAtual = ref(1)
 const modalConfirmacaoImportacaoAberto = ref(false)
 const telaInicializada = ref(false)
+const aplicacaoEmLotePendente = ref<{
+  tituloOrigemId: number
+  categoriaCodigo: RateioCategoriaCodigo
+  titulosIds: number[]
+} | null>(null)
 
 const competenciaFormatada = computed(() => competenciaFromInput(competenciaInput.value))
 
@@ -257,11 +262,65 @@ function alternarCategoriaAberta(tituloId: number) {
   categoriaAbertaId.value = categoriaAbertaId.value === tituloId ? null : tituloId
 }
 
-function selecionarCategoria(titulo: TituloListItem, categoriaCodigo: RateioCategoriaCodigo | null) {
+function getChaveDestinoSemelhante(titulo: Pick<TituloPagoRow, 'filial' | 'fornecedor' | 'historico'>) {
+  const partes = [titulo.filial, titulo.fornecedor, titulo.historico]
+    .map((valor) => getTextoComparavel(valor))
+
+  return partes.every(Boolean) ? partes.join('|') : null
+}
+
+function definirCategoria(titulo: TituloListItem, categoriaCodigo: RateioCategoriaCodigo | null) {
   titulo.categoriaCodigo = categoriaCodigo
   titulo.categoriaOrigem = titulo.revisaoStatus === 'sugestao' && categoriaCodigo ? 'sugerida' : null
   titulo.sugestaoConfianca = null
+}
+
+function selecionarCategoria(titulo: TituloListItem, categoriaCodigo: RateioCategoriaCodigo | null) {
+  definirCategoria(titulo, categoriaCodigo)
   categoriaAbertaId.value = null
+  aplicacaoEmLotePendente.value = null
+
+  if (!categoriaCodigo) {
+    return
+  }
+
+  const chaveOrigem = getChaveDestinoSemelhante(titulo)
+  const semelhantesPendentes = titulos.value.filter((item) => (
+    chaveOrigem !== null
+    && item.id !== titulo.id
+    && !item.categoriaCodigo
+    && getChaveDestinoSemelhante(item) === chaveOrigem
+  ))
+
+  if (semelhantesPendentes.length) {
+    aplicacaoEmLotePendente.value = {
+      tituloOrigemId: titulo.id,
+      categoriaCodigo,
+      titulosIds: semelhantesPendentes.map((item) => item.id)
+    }
+  }
+}
+
+function aplicarCategoriaAosSemelhantes() {
+  const aplicacao = aplicacaoEmLotePendente.value
+
+  if (!aplicacao) {
+    return
+  }
+
+  const ids = new Set(aplicacao.titulosIds)
+
+  for (const titulo of titulos.value) {
+    if (ids.has(titulo.id) && !titulo.categoriaCodigo) {
+      definirCategoria(titulo, aplicacao.categoriaCodigo)
+    }
+  }
+
+  aplicacaoEmLotePendente.value = null
+}
+
+function dispensarAplicacaoEmLote() {
+  aplicacaoEmLotePendente.value = null
 }
 
 function getTextoComparavel(value: string | null | undefined) {
@@ -880,8 +939,24 @@ function fecharMenus() {
   filtroHistoricosAberto.value = false
 }
 
+function tratarAtalhoAplicacaoEmLote(event: KeyboardEvent) {
+  if (!aplicacaoEmLotePendente.value || event.repeat || event.isComposing) {
+    return
+  }
+
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    aplicarCategoriaAosSemelhantes()
+  }
+  else if (event.key === 'Escape') {
+    event.preventDefault()
+    dispensarAplicacaoEmLote()
+  }
+}
+
 onMounted(async () => {
   document.addEventListener('click', fecharMenus)
+  document.addEventListener('keydown', tratarAtalhoAplicacaoEmLote)
   const competenciaSalva = import.meta.client ? localStorage.getItem(LOCAL_STORAGE_COMPETENCIA_KEY) : null
   const ultimaImportacaoSalva = import.meta.client ? localStorage.getItem(LOCAL_STORAGE_ULTIMA_IMPORTACAO_KEY) : null
 
@@ -899,6 +974,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', fecharMenus)
+  document.removeEventListener('keydown', tratarAtalhoAplicacaoEmLote)
 })
 
 watch(competenciaInput, async (value, oldValue) => {
@@ -957,6 +1033,38 @@ watch(totalPaginas, () => {
           </div>
         </div>
       </section>
+
+      <div
+        v-if="aplicacaoEmLotePendente"
+        class="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-2xl -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-emerald-400/30 bg-slate-950/95 p-3 shadow-2xl shadow-black/50 backdrop-blur"
+        role="status"
+      >
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <p class="text-sm text-slate-100">
+            Aplicar este destino também a
+            <strong class="text-emerald-300">
+              {{ aplicacaoEmLotePendente.titulosIds.length }}
+              {{ aplicacaoEmLotePendente.titulosIds.length === 1 ? 'pendente igual' : 'pendentes iguais' }}
+            </strong>?
+          </p>
+          <div class="flex shrink-0 gap-2">
+            <button
+              type="button"
+              class="rounded-xl border border-white/10 px-3 py-2 text-xs font-medium text-slate-300 transition hover:bg-white/[0.06]"
+              @click="dispensarAplicacaoEmLote"
+            >
+              Não <span class="ml-1 text-slate-500">Esc</span>
+            </button>
+            <button
+              type="button"
+              class="rounded-xl border border-emerald-400/30 bg-emerald-400/15 px-4 py-2 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-400/25"
+              @click="aplicarCategoriaAosSemelhantes"
+            >
+              Aplicar <span class="ml-1 text-emerald-300/70">Enter</span>
+            </button>
+          </div>
+        </div>
+      </div>
 
       <section class="rounded-[28px] border border-white/10 bg-slate-950/70 p-6 shadow-2xl shadow-black/20 backdrop-blur">
         <div class="flex flex-col gap-6">
