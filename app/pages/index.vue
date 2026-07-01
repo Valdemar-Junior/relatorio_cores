@@ -26,7 +26,7 @@ const supabase = useSupabaseClient()
 
 const competenciaInput = ref(getCurrentCompetenciaInput())
 const busca = ref('')
-const filtroClassificacao = ref<'todos' | 'sugestoes' | 'pendentes'>('todos')
+const filtroClassificacao = ref<'todos' | 'sugestoes' | 'pendentes' | 'salvos'>('todos')
 const historicosSelecionados = ref<string[]>([])
 const titulos = ref<TituloListItem[]>([])
 const historicoClassificacoes = ref<RateioHistoricoRow[]>([])
@@ -43,7 +43,6 @@ const categoriaAbertaId = ref<number | null>(null)
 const etapaImportacao = ref('Preparando a importacao...')
 const detalheImportacao = ref('Estamos organizando a base para carregar os titulos da competencia selecionada.')
 const paginaAtual = ref(1)
-const classificacoesPendentes = ref(false)
 const modalConfirmacaoImportacaoAberto = ref(false)
 const telaInicializada = ref(false)
 
@@ -110,11 +109,15 @@ const titulosFiltradosBase = computed(() => {
 
 const titulosFiltrados = computed(() => {
   if (filtroClassificacao.value === 'sugestoes') {
-    return titulosFiltradosBase.value.filter((titulo) => titulo.categoriaOrigem === 'sugerida')
+    return titulosFiltradosBase.value.filter((titulo) => titulo.revisaoStatus === 'sugestao')
   }
 
   if (filtroClassificacao.value === 'pendentes') {
-    return titulosFiltradosBase.value.filter((titulo) => !titulo.categoriaCodigo)
+    return titulosFiltradosBase.value.filter((titulo) => titulo.revisaoStatus === 'pendente')
+  }
+
+  if (filtroClassificacao.value === 'salvos') {
+    return titulosFiltradosBase.value.filter((titulo) => titulo.revisaoStatus === 'salva')
   }
 
   return titulosFiltradosBase.value
@@ -122,7 +125,7 @@ const titulosFiltrados = computed(() => {
 
 const totalTitulos = computed(() => titulos.value.length)
 const totalClassificados = computed(() => titulos.value.filter((titulo) => !!titulo.categoriaCodigo).length)
-const totalSugeridos = computed(() => titulos.value.filter((titulo) => titulo.categoriaOrigem === 'sugerida').length)
+const totalSugeridos = computed(() => titulos.value.filter((titulo) => titulo.revisaoStatus === 'sugestao').length)
 const totalPendentes = computed(() => totalTitulos.value - totalClassificados.value)
 const titulosResumo = computed(() => historicosSelecionados.value.length
   ? titulos.value.filter((titulo) => historicosSelecionados.value.includes(normalizeText(titulo.historico)))
@@ -130,8 +133,9 @@ const titulosResumo = computed(() => historicosSelecionados.value.length
 )
 const totalTitulosResumo = computed(() => titulosResumo.value.length)
 const totalClassificadosResumo = computed(() => titulosResumo.value.filter((titulo) => !!titulo.categoriaCodigo).length)
-const totalSugeridosResumo = computed(() => titulosResumo.value.filter((titulo) => titulo.categoriaOrigem === 'sugerida').length)
-const totalPendentesResumo = computed(() => totalTitulosResumo.value - totalClassificadosResumo.value)
+const totalSugeridosResumo = computed(() => titulosResumo.value.filter((titulo) => titulo.revisaoStatus === 'sugestao').length)
+const totalPendentesResumo = computed(() => titulosResumo.value.filter((titulo) => titulo.revisaoStatus === 'pendente').length)
+const totalSalvosResumo = computed(() => titulosResumo.value.filter((titulo) => titulo.revisaoStatus === 'salva').length)
 const valorTotalPagoResumo = computed(() => titulosResumo.value.reduce((total, titulo) => total + Number(titulo.valor_pago ?? 0), 0))
 const totalPaginas = computed(() => Math.max(1, Math.ceil(titulosFiltrados.value.length / TITULOS_POR_PAGINA)))
 const titulosPaginados = computed(() => {
@@ -146,7 +150,6 @@ const paginaInicial = computed(() => {
   return ((paginaAtual.value - 1) * TITULOS_POR_PAGINA) + 1
 })
 const paginaFinal = computed(() => Math.min(paginaAtual.value * TITULOS_POR_PAGINA, titulosFiltrados.value.length))
-const paginaAtualCompleta = computed(() => titulosPaginados.value.every((titulo) => !!titulo.categoriaCodigo))
 const pendentesPaginaAtual = computed(() => titulosPaginados.value.filter((titulo) => !titulo.categoriaCodigo).length)
 const categoriasOrdenadasPorUso = computed(() => {
   const frequencias = new Map<RateioCategoriaCodigo, number>()
@@ -256,10 +259,9 @@ function alternarCategoriaAberta(tituloId: number) {
 
 function selecionarCategoria(titulo: TituloListItem, categoriaCodigo: RateioCategoriaCodigo | null) {
   titulo.categoriaCodigo = categoriaCodigo
-  titulo.categoriaOrigem = categoriaCodigo ? 'salva' : null
+  titulo.categoriaOrigem = titulo.revisaoStatus === 'sugestao' && categoriaCodigo ? 'sugerida' : null
   titulo.sugestaoConfianca = null
   categoriaAbertaId.value = null
-  classificacoesPendentes.value = true
 }
 
 function getTextoComparavel(value: string | null | undefined) {
@@ -356,34 +358,10 @@ function shouldOpenCategoriaAcima(index: number, totalItens: number) {
 async function irParaPagina(page: number) {
   const paginaDestino = Math.min(Math.max(1, page), totalPaginas.value)
 
-  if (paginaDestino === paginaAtual.value) {
-    return
+  if (paginaDestino !== paginaAtual.value) {
+    paginaAtual.value = paginaDestino
+    erro.value = ''
   }
-
-  if (paginaDestino > paginaAtual.value && !paginaAtualCompleta.value) {
-    const primeiroPendente = titulosPaginados.value.find((titulo) => !titulo.categoriaCodigo)
-    erro.value = `Ainda ${pendentesPaginaAtual.value} titulo(s) sem destino nesta pagina. Confira o item destacado.`
-
-    if (primeiroPendente && import.meta.client) {
-      await nextTick()
-      document.getElementById(`titulo-${primeiroPendente.id}`)?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'center'
-      })
-    }
-
-    return
-  }
-
-  if (classificacoesPendentes.value) {
-    const salvou = await salvarClassificacoes(true)
-
-    if (!salvou) {
-      return
-    }
-  }
-
-  paginaAtual.value = paginaDestino
 }
 
 function solicitarImportacao() {
@@ -423,7 +401,7 @@ async function carregarTodosTitulos(startIso: string, endIso: string) {
   while (true) {
     const { data, error } = await supabase
       .from('titulos_financeiros_pagos')
-      .select('id, filial, fornecedor, historico, observacao, complemento, sufixo, numero_titulo, valor_pago, data_vencimento, data_baixa, data_ultimo_pagamento')
+      .select('id, titulo_id, baixa_id, filial, fornecedor, historico, observacao, complemento, sufixo, numero_titulo, valor_pago, data_vencimento, data_baixa, data_ultimo_pagamento')
       .gte('data_baixa', startIso)
       .lt('data_baixa', endIso)
       .order('data_baixa', { ascending: true })
@@ -454,7 +432,7 @@ async function carregarTodoHistorico() {
   while (true) {
     const { data, error } = await supabase
       .from('rateio_historico_classificacoes')
-      .select('titulo_origem_id, competencia, filial, fornecedor, historico, observacao, complemento, categoria_codigo')
+      .select('titulo_origem_id, titulo_erp_id, baixa_erp_id, competencia, filial, fornecedor, historico, observacao, complemento, categoria_codigo')
       .range(from, from + TITULOS_BATCH_SIZE - 1)
 
     if (error) {
@@ -547,10 +525,10 @@ async function carregarTitulos(exibirLoading = true) {
         ...titulo,
         categoriaCodigo: categoriaSalva ?? sugestao?.categoria ?? null,
         categoriaOrigem: categoriaSalva ? 'salva' : sugestao ? 'sugerida' : null,
-        sugestaoConfianca: sugestao?.confianca ?? null
+        sugestaoConfianca: sugestao?.confianca ?? null,
+        revisaoStatus: categoriaSalva ? 'salva' : sugestao ? 'sugestao' : 'pendente'
       }
     })
-    classificacoesPendentes.value = false
     ajustarPaginacao()
   }
   catch (caughtError) {
@@ -602,8 +580,8 @@ async function importarTitulos() {
   }
 }
 
-async function salvarClassificacoes(silencioso = false) {
-  if (!titulos.value.length) {
+async function salvarClassificacoes(titulosAlvo: TituloListItem[], mensagem: string) {
+  if (!titulosAlvo.length) {
     erro.value = 'Nao ha titulos carregados para salvar.'
     return false
   }
@@ -614,13 +592,10 @@ async function salvarClassificacoes(silencioso = false) {
   }
 
   salvando.value = true
-
-  if (!silencioso) {
-    resetMensagens()
-  }
+  resetMensagens()
 
   try {
-    const classificacoes = titulos.value
+    const classificacoes = titulosAlvo
       .filter((titulo): titulo is TituloListItem & { categoriaCodigo: RateioCategoriaCodigo } => !!titulo.categoriaCodigo)
       .map((titulo) => ({
         titulo_pago_id: titulo.id,
@@ -628,12 +603,16 @@ async function salvarClassificacoes(silencioso = false) {
         categoria_codigo: titulo.categoriaCodigo
       }))
 
-    const idsSemCategoria = titulos.value.filter((titulo) => !titulo.categoriaCodigo).map((titulo) => titulo.id)
+    const idsSemCategoria = titulosAlvo.filter((titulo) => !titulo.categoriaCodigo).map((titulo) => titulo.id)
 
-    const memoriaClassificacoes = titulos.value
-      .filter((titulo): titulo is TituloListItem & { categoriaCodigo: RateioCategoriaCodigo } => !!titulo.categoriaCodigo)
+    const memoriaClassificacoes = titulosAlvo
+      .filter((titulo): titulo is TituloListItem & { categoriaCodigo: RateioCategoriaCodigo, baixa_id: number } => (
+        !!titulo.categoriaCodigo && titulo.baixa_id !== null
+      ))
       .map((titulo) => ({
         titulo_origem_id: titulo.id,
+        titulo_erp_id: titulo.titulo_id,
+        baixa_erp_id: titulo.baixa_id,
         competencia: competenciaFormatada.value,
         filial: titulo.filial,
         fornecedor: titulo.fornecedor,
@@ -668,7 +647,7 @@ async function salvarClassificacoes(silencioso = false) {
     if (memoriaClassificacoes.length > 0) {
       const { error } = await supabase
         .from('rateio_historico_classificacoes')
-        .upsert(memoriaClassificacoes, { onConflict: 'competencia,titulo_origem_id' })
+        .upsert(memoriaClassificacoes, { onConflict: 'competencia,baixa_erp_id' })
 
       if (error) {
         throw error
@@ -676,24 +655,29 @@ async function salvarClassificacoes(silencioso = false) {
     }
 
     if (idsSemCategoria.length > 0) {
+      const baixasSemCategoria = titulosAlvo
+        .filter((titulo): titulo is TituloListItem & { baixa_id: number } => !titulo.categoriaCodigo && titulo.baixa_id !== null)
+        .map((titulo) => titulo.baixa_id)
+
+      if (baixasSemCategoria.length === 0) {
+        await carregarTitulos(false)
+        sucesso.value = mensagem
+        return true
+      }
+
       const { error } = await supabase
         .from('rateio_historico_classificacoes')
         .delete()
         .eq('competencia', competenciaFormatada.value)
-        .in('titulo_origem_id', idsSemCategoria)
+        .in('baixa_erp_id', baixasSemCategoria)
 
       if (error) {
         throw error
       }
     }
 
-    classificacoesPendentes.value = false
-
-    if (!silencioso) {
-      sucesso.value = 'Classificacoes salvas com sucesso.'
-    }
-
     await carregarTitulos(false)
+    sucesso.value = mensagem
     return true
   }
   catch (caughtError) {
@@ -702,6 +686,33 @@ async function salvarClassificacoes(silencioso = false) {
   }
   finally {
     salvando.value = false
+  }
+}
+
+async function salvarPaginaAtual() {
+  const itensDaPagina = [...titulosPaginados.value]
+  const itensPreenchidos = itensDaPagina.filter((titulo) => !!titulo.categoriaCodigo)
+
+  if (filtroClassificacao.value === 'pendentes' && !itensPreenchidos.length) {
+    erro.value = 'Preencha ao menos um destino desta pagina antes de salvar.'
+    return
+  }
+
+  const mensagem = filtroClassificacao.value === 'sugestoes'
+    ? `${itensPreenchidos.length} sugestao(oes) confirmada(s). O progresso ficou salvo.`
+    : `${itensPreenchidos.length} classificacao(oes) salva(s). Voce pode continuar depois.`
+
+  const salvou = await salvarClassificacoes(
+    filtroClassificacao.value === 'pendentes' ? itensPreenchidos : itensDaPagina,
+    mensagem
+  )
+
+  if (salvou && import.meta.client) {
+    await nextTick()
+    document.getElementById('tabela-classificacao')?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start'
+    })
   }
 }
 
@@ -1042,7 +1053,10 @@ watch(totalPaginas, () => {
         />
       </section>
 
-      <section class="rounded-[28px] border border-white/10 bg-slate-950/70 p-6 shadow-2xl shadow-black/20 backdrop-blur">
+      <section
+        id="tabela-classificacao"
+        class="scroll-mt-4 rounded-[28px] border border-white/10 bg-slate-950/70 p-6 shadow-2xl shadow-black/20 backdrop-blur"
+      >
         <div class="flex flex-col gap-6">
           <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div class="space-y-2">
@@ -1138,14 +1152,6 @@ watch(totalPaginas, () => {
                 class="min-w-[280px] rounded-2xl border border-white/10 bg-slate-900/80 px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20"
               >
 
-              <button
-                type="button"
-                class="inline-flex items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
-                :disabled="salvando || !totalTitulos"
-                @click="salvarClassificacoes"
-              >
-                {{ salvando ? 'Salvando...' : 'Salvar classificacoes' }}
-              </button>
             </div>
           </div>
 
@@ -1180,6 +1186,16 @@ watch(totalPaginas, () => {
             >
               Pendentes <span class="ml-1 text-xs opacity-70">{{ totalPendentesResumo }}</span>
             </button>
+            <button
+              type="button"
+              class="rounded-xl px-4 py-2 text-sm font-semibold transition"
+              :class="filtroClassificacao === 'salvos'
+                ? 'bg-emerald-400/15 text-emerald-200 shadow-sm'
+                : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'"
+              @click="filtroClassificacao = 'salvos'"
+            >
+              Salvos/Revisados <span class="ml-1 text-xs opacity-70">{{ totalSalvosResumo }}</span>
+            </button>
           </div>
 
           <div
@@ -1204,7 +1220,7 @@ watch(totalPaginas, () => {
               v-if="totalSugeridos"
               class="border-b border-sky-400/20 bg-sky-400/10 px-4 py-3 text-sm text-sky-100"
             >
-              O historico sugeriu {{ totalSugeridos }} categoria(s). Confira os itens marcados e clique em salvar para confirmar.
+              Restam {{ totalSugeridos }} sugestao(oes) para revisar. Confirme uma pagina por vez; o progresso fica salvo para continuar depois.
             </div>
             <div class="border-b border-white/10 bg-slate-900/90 px-4 py-3 text-sm text-slate-300">
               Exibindo
@@ -1351,6 +1367,15 @@ watch(totalPaginas, () => {
                         </div>
 
                         <div
+                          v-if="titulo.revisaoStatus === 'salva'"
+                          class="mt-2"
+                        >
+                          <span class="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-1 text-xs font-medium text-emerald-200">
+                            Salvo / revisado
+                          </span>
+                        </div>
+
+                        <div
                           v-if="categoriaAbertaId === titulo.id"
                           class="absolute right-0 z-30 w-[320px] max-w-[min(90vw,360px)] overflow-hidden rounded-2xl border border-white/10 bg-slate-950/95 shadow-2xl shadow-black/30 backdrop-blur"
                           :class="shouldOpenCategoriaAcima(index, titulosPaginados.length) ? 'bottom-[calc(100%+0.5rem)]' : 'top-[calc(100%+0.5rem)]'"
@@ -1409,10 +1434,18 @@ watch(totalPaginas, () => {
                   <button
                     type="button"
                     class="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-medium text-slate-200 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-50"
-                    :disabled="paginaAtual === totalPaginas || salvando || !paginaAtualCompleta"
+                    :disabled="paginaAtual === totalPaginas || salvando"
                     @click="irParaPagina(paginaAtual + 1)"
                   >
                     Proxima
+                  </button>
+                  <button
+                    type="button"
+                    class="inline-flex items-center justify-center rounded-xl border border-emerald-400/30 bg-emerald-400/15 px-4 py-2 text-xs font-semibold text-emerald-100 transition hover:border-emerald-300 hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="salvando || !titulosPaginados.length"
+                    @click="salvarPaginaAtual"
+                  >
+                    {{ salvando ? 'Salvando...' : 'Salvar esta pagina' }}
                   </button>
                 </div>
               </div>

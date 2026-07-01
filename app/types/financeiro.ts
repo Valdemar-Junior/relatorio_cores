@@ -2,6 +2,8 @@ import type { RateioCategoriaCodigo } from '../constants/rateioCategorias'
 
 export interface TituloPagoRow {
   id: number
+  titulo_id: number | null
+  baixa_id: number | null
   filial: string | null
   fornecedor: string | null
   historico: string | null
@@ -25,10 +27,13 @@ export interface TituloListItem extends TituloPagoRow {
   categoriaCodigo: RateioCategoriaCodigo | null
   categoriaOrigem: 'salva' | 'sugerida' | null
   sugestaoConfianca: number | null
+  revisaoStatus: 'sugestao' | 'pendente' | 'salva'
 }
 
 export interface RateioHistoricoRow {
   titulo_origem_id: number
+  titulo_erp_id: number | null
+  baixa_erp_id: number | null
   competencia: string
   filial: string | null
   fornecedor: string | null
