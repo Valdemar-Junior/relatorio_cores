@@ -50,6 +50,12 @@ const aplicacaoEmLotePendente = ref<{
   categoriaCodigo: RateioCategoriaCodigo
   titulosIds: number[]
 } | null>(null)
+const detalheEmEdicao = ref<{
+  tituloId: number
+  campo: 'observacao' | 'complemento'
+  valor: string
+} | null>(null)
+const detalheSalvando = ref(false)
 
 const competenciaFormatada = computed(() => competenciaFromInput(competenciaInput.value))
 
@@ -256,6 +262,71 @@ function selecionarTodosHistoricos() {
 
 function getCategoriaLabel(codigo: RateioCategoriaCodigo | null) {
   return codigo ? RATEIO_CATEGORIAS_MAP[codigo] : 'Selecione'
+}
+
+function isDetalheEmEdicao(tituloId: number, campo: 'observacao' | 'complemento') {
+  return detalheEmEdicao.value?.tituloId === tituloId && detalheEmEdicao.value.campo === campo
+}
+
+async function iniciarEdicaoDetalhe(titulo: TituloListItem, campo: 'observacao' | 'complemento') {
+  if (detalheSalvando.value) {
+    return
+  }
+
+  detalheEmEdicao.value = {
+    tituloId: titulo.id,
+    campo,
+    valor: titulo[campo] ?? ''
+  }
+
+  await nextTick()
+  document.getElementById(`edicao-${campo}-${titulo.id}`)?.focus()
+}
+
+function cancelarEdicaoDetalhe() {
+  if (!detalheSalvando.value) {
+    detalheEmEdicao.value = null
+  }
+}
+
+async function salvarEdicaoDetalhe(titulo: TituloListItem) {
+  const edicao = detalheEmEdicao.value
+
+  if (!edicao || edicao.tituloId !== titulo.id || detalheSalvando.value) {
+    return
+  }
+
+  const novoValor = edicao.valor.trim() || null
+
+  if (novoValor === titulo[edicao.campo]) {
+    detalheEmEdicao.value = null
+    return
+  }
+
+  detalheSalvando.value = true
+  erro.value = ''
+
+  try {
+    const { error } = await supabase
+      .from('titulos_financeiros_pagos')
+      .update({ [edicao.campo]: novoValor })
+      .eq('id', titulo.id)
+      .select('id')
+      .single()
+
+    if (error) {
+      throw error
+    }
+
+    titulo[edicao.campo] = novoValor
+    detalheEmEdicao.value = null
+  }
+  catch (caughtError) {
+    erro.value = getErrorMessage(caughtError, `Nao foi possivel salvar a ${edicao.campo}.`)
+  }
+  finally {
+    detalheSalvando.value = false
+  }
 }
 
 function alternarCategoriaAberta(tituloId: number) {
@@ -940,7 +1011,7 @@ function fecharMenus() {
 }
 
 function tratarAtalhoAplicacaoEmLote(event: KeyboardEvent) {
-  if (!aplicacaoEmLotePendente.value || event.repeat || event.isComposing) {
+  if (!aplicacaoEmLotePendente.value || detalheEmEdicao.value || event.repeat || event.isComposing) {
     return
   }
 
@@ -1422,14 +1493,110 @@ watch(totalPaginas, () => {
                       {{ normalizeText(titulo.historico) }}
                     </td>
                     <td class="px-4 py-4 text-slate-300 break-words">
-                      <div class="space-y-2">
-                        <p>{{ normalizeText(titulo.observacao) }}</p>
-                        <p
-                          v-if="titulo.complemento"
-                          class="text-xs text-slate-400"
-                        >
-                          {{ titulo.complemento }}
-                        </p>
+                      <div class="space-y-3">
+                        <div>
+                          <div
+                            v-if="isDetalheEmEdicao(titulo.id, 'observacao') && detalheEmEdicao"
+                            class="space-y-2"
+                          >
+                            <textarea
+                              :id="`edicao-observacao-${titulo.id}`"
+                              v-model="detalheEmEdicao.valor"
+                              rows="3"
+                              class="w-full resize-y rounded-xl border border-emerald-400/40 bg-slate-950 px-3 py-2 text-sm text-white outline-none focus:ring-2 focus:ring-emerald-400/20"
+                              placeholder="Digite a observação"
+                              :disabled="detalheSalvando"
+                              @keydown.enter.exact.prevent="salvarEdicaoDetalhe(titulo)"
+                              @keydown.esc.prevent="cancelarEdicaoDetalhe"
+                            />
+                            <div class="flex items-center gap-2 text-[11px]">
+                              <button
+                                type="button"
+                                class="font-semibold text-emerald-300 hover:text-emerald-200 disabled:opacity-50"
+                                :disabled="detalheSalvando"
+                                @click="salvarEdicaoDetalhe(titulo)"
+                              >
+                                {{ detalheSalvando ? 'Salvando...' : 'Salvar · Enter' }}
+                              </button>
+                              <button
+                                type="button"
+                                class="text-slate-500 hover:text-slate-300 disabled:opacity-50"
+                                :disabled="detalheSalvando"
+                                @click="cancelarEdicaoDetalhe"
+                              >
+                                Cancelar · Esc
+                              </button>
+                            </div>
+                          </div>
+                          <p
+                            v-else-if="titulo.observacao"
+                            class="cursor-text rounded-lg transition hover:bg-white/[0.04]"
+                            title="Duplo clique para editar a observação"
+                            @dblclick="iniciarEdicaoDetalhe(titulo, 'observacao')"
+                          >
+                            {{ titulo.observacao }}
+                          </p>
+                          <button
+                            v-else
+                            type="button"
+                            class="text-left text-xs font-medium text-slate-500 transition hover:text-emerald-300"
+                            @click="iniciarEdicaoDetalhe(titulo, 'observacao')"
+                          >
+                            + Adicionar observação
+                          </button>
+                        </div>
+
+                        <div>
+                          <div
+                            v-if="isDetalheEmEdicao(titulo.id, 'complemento') && detalheEmEdicao"
+                            class="space-y-2"
+                          >
+                            <textarea
+                              :id="`edicao-complemento-${titulo.id}`"
+                              v-model="detalheEmEdicao.valor"
+                              rows="3"
+                              class="w-full resize-y rounded-xl border border-emerald-400/40 bg-slate-950 px-3 py-2 text-xs text-white outline-none focus:ring-2 focus:ring-emerald-400/20"
+                              placeholder="Digite o complemento"
+                              :disabled="detalheSalvando"
+                              @keydown.enter.exact.prevent="salvarEdicaoDetalhe(titulo)"
+                              @keydown.esc.prevent="cancelarEdicaoDetalhe"
+                            />
+                            <div class="flex items-center gap-2 text-[11px]">
+                              <button
+                                type="button"
+                                class="font-semibold text-emerald-300 hover:text-emerald-200 disabled:opacity-50"
+                                :disabled="detalheSalvando"
+                                @click="salvarEdicaoDetalhe(titulo)"
+                              >
+                                {{ detalheSalvando ? 'Salvando...' : 'Salvar · Enter' }}
+                              </button>
+                              <button
+                                type="button"
+                                class="text-slate-500 hover:text-slate-300 disabled:opacity-50"
+                                :disabled="detalheSalvando"
+                                @click="cancelarEdicaoDetalhe"
+                              >
+                                Cancelar · Esc
+                              </button>
+                            </div>
+                          </div>
+                          <p
+                            v-else-if="titulo.complemento"
+                            class="cursor-text rounded-lg text-xs text-slate-400 transition hover:bg-white/[0.04]"
+                            title="Duplo clique para editar o complemento"
+                            @dblclick="iniciarEdicaoDetalhe(titulo, 'complemento')"
+                          >
+                            {{ titulo.complemento }}
+                          </p>
+                          <button
+                            v-else
+                            type="button"
+                            class="text-left text-xs font-medium text-slate-500 transition hover:text-emerald-300"
+                            @click="iniciarEdicaoDetalhe(titulo, 'complemento')"
+                          >
+                            + Adicionar complemento
+                          </button>
+                        </div>
                       </div>
                     </td>
                     <td class="px-4 py-4 text-slate-300">
