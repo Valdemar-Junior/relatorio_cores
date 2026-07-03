@@ -40,6 +40,13 @@ const ultimaImportacao = ref<string | null>(null)
 const filtroHistoricosAberto = ref(false)
 const buscaHistorico = ref('')
 const categoriaAbertaId = ref<number | null>(null)
+const categoriaMenuPosicao = ref<{
+  left: number
+  width: number
+  maxHeight: number
+  top?: number
+  bottom?: number
+} | null>(null)
 const etapaImportacao = ref('Preparando a importacao...')
 const detalheImportacao = ref('Estamos organizando a base para carregar os titulos da competencia selecionada.')
 const paginaAtual = ref(1)
@@ -329,8 +336,45 @@ async function salvarEdicaoDetalhe(titulo: TituloListItem) {
   }
 }
 
-function alternarCategoriaAberta(tituloId: number) {
-  categoriaAbertaId.value = categoriaAbertaId.value === tituloId ? null : tituloId
+function fecharCategoriaAberta() {
+  categoriaAbertaId.value = null
+  categoriaMenuPosicao.value = null
+}
+
+function alternarCategoriaAberta(tituloId: number, event: MouseEvent) {
+  if (categoriaAbertaId.value === tituloId) {
+    fecharCategoriaAberta()
+    return
+  }
+
+  const botao = event.currentTarget as HTMLElement | null
+
+  if (!botao || !import.meta.client) {
+    return
+  }
+
+  const rect = botao.getBoundingClientRect()
+  const margem = 12
+  const espacamento = 8
+  const largura = Math.min(320, window.innerWidth - (margem * 2))
+  const left = Math.min(
+    Math.max(margem, rect.right - largura),
+    window.innerWidth - largura - margem
+  )
+  const espacoAbaixo = window.innerHeight - rect.bottom - margem - espacamento
+  const espacoAcima = rect.top - margem - espacamento
+  const abrirAbaixo = espacoAbaixo >= 240 || espacoAbaixo >= espacoAcima
+  const espacoDisponivel = abrirAbaixo ? espacoAbaixo : espacoAcima
+
+  categoriaMenuPosicao.value = {
+    left,
+    width: largura,
+    maxHeight: Math.max(120, Math.min(320, espacoDisponivel)),
+    ...(abrirAbaixo
+      ? { top: rect.bottom + espacamento }
+      : { bottom: window.innerHeight - rect.top + espacamento })
+  }
+  categoriaAbertaId.value = tituloId
 }
 
 function getChaveDestinoSemelhante(titulo: Pick<TituloPagoRow, 'filial' | 'fornecedor' | 'historico'>) {
@@ -348,7 +392,7 @@ function definirCategoria(titulo: TituloListItem, categoriaCodigo: RateioCategor
 
 function selecionarCategoria(titulo: TituloListItem, categoriaCodigo: RateioCategoriaCodigo | null) {
   definirCategoria(titulo, categoriaCodigo)
-  categoriaAbertaId.value = null
+  fecharCategoriaAberta()
   aplicacaoEmLotePendente.value = null
 
   if (!categoriaCodigo) {
@@ -479,10 +523,6 @@ function sugerirCategoria(titulo: TituloPagoRow, historicoRateio: RateioHistoric
     .map(({ registro }) => registro)
 
   return getMelhorCategoria(correspondenciaFornecedor, 3, 0.9)
-}
-
-function shouldOpenCategoriaAcima(index: number, totalItens: number) {
-  return index >= Math.max(totalItens - 3, 0)
 }
 
 async function irParaPagina(page: number) {
@@ -1006,8 +1046,25 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 function fecharMenus() {
-  categoriaAbertaId.value = null
+  fecharCategoriaAberta()
   filtroHistoricosAberto.value = false
+}
+
+function tratarAtalhoCategoria(event: KeyboardEvent) {
+  if (event.key === 'Escape' && categoriaAbertaId.value !== null) {
+    event.preventDefault()
+    fecharCategoriaAberta()
+  }
+}
+
+function fecharCategoriaAoRolar(event: Event) {
+  const alvo = event.target
+
+  if (alvo instanceof Element && alvo.closest('[data-categoria-menu]')) {
+    return
+  }
+
+  fecharCategoriaAberta()
 }
 
 function tratarAtalhoAplicacaoEmLote(event: KeyboardEvent) {
@@ -1028,6 +1085,9 @@ function tratarAtalhoAplicacaoEmLote(event: KeyboardEvent) {
 onMounted(async () => {
   document.addEventListener('click', fecharMenus)
   document.addEventListener('keydown', tratarAtalhoAplicacaoEmLote)
+  document.addEventListener('keydown', tratarAtalhoCategoria)
+  window.addEventListener('resize', fecharCategoriaAberta)
+  window.addEventListener('scroll', fecharCategoriaAoRolar, true)
   const competenciaSalva = import.meta.client ? localStorage.getItem(LOCAL_STORAGE_COMPETENCIA_KEY) : null
   const ultimaImportacaoSalva = import.meta.client ? localStorage.getItem(LOCAL_STORAGE_ULTIMA_IMPORTACAO_KEY) : null
 
@@ -1046,6 +1106,9 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   document.removeEventListener('click', fecharMenus)
   document.removeEventListener('keydown', tratarAtalhoAplicacaoEmLote)
+  document.removeEventListener('keydown', tratarAtalhoCategoria)
+  window.removeEventListener('resize', fecharCategoriaAberta)
+  window.removeEventListener('scroll', fecharCategoriaAoRolar, true)
 })
 
 watch(competenciaInput, async (value, oldValue) => {
@@ -1475,7 +1538,7 @@ watch(totalPaginas, () => {
 
                 <tbody class="divide-y divide-white/10 text-slate-100">
                   <tr
-                    v-for="(titulo, index) in titulosPaginados"
+                    v-for="titulo in titulosPaginados"
                     :id="`titulo-${titulo.id}`"
                     :key="titulo.id"
                     class="align-top transition"
@@ -1619,7 +1682,7 @@ watch(totalPaginas, () => {
                         <button
                           type="button"
                           class="flex w-full items-start justify-between gap-2 rounded-2xl border border-white/10 bg-slate-950/80 px-4 py-3 text-left text-sm text-white outline-none transition hover:bg-slate-950 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/20"
-                          @click="alternarCategoriaAberta(titulo.id)"
+                          @click="alternarCategoriaAberta(titulo.id, $event)"
                         >
                           <span class="block min-w-0 flex-1 break-words whitespace-normal leading-5">
                             {{ getCategoriaLabel(titulo.categoriaCodigo) }}
@@ -1659,39 +1722,51 @@ watch(totalPaginas, () => {
                           </span>
                         </div>
 
-                        <div
-                          v-if="categoriaAbertaId === titulo.id"
-                          class="absolute right-0 z-30 w-[320px] max-w-[min(90vw,360px)] overflow-hidden rounded-2xl border border-white/10 bg-slate-950/95 shadow-2xl shadow-black/30 backdrop-blur"
-                          :class="shouldOpenCategoriaAcima(index, titulosPaginados.length) ? 'bottom-[calc(100%+0.5rem)]' : 'top-[calc(100%+0.5rem)]'"
-                        >
-                          <div class="max-h-80 overflow-y-auto p-2">
-                            <button
-                              type="button"
-                              class="flex w-full rounded-xl px-3 py-2.5 text-left text-sm text-slate-200 transition hover:bg-white/[0.06]"
-                              @click="selecionarCategoria(titulo, null)"
+                        <Teleport to="body">
+                          <div
+                            v-if="categoriaAbertaId === titulo.id && categoriaMenuPosicao"
+                            data-categoria-menu
+                            class="fixed z-[100] overflow-hidden rounded-2xl border border-white/10 bg-slate-950/95 shadow-2xl shadow-black/40 backdrop-blur"
+                            :style="{
+                              left: `${categoriaMenuPosicao.left}px`,
+                              width: `${categoriaMenuPosicao.width}px`,
+                              top: categoriaMenuPosicao.top === undefined ? undefined : `${categoriaMenuPosicao.top}px`,
+                              bottom: categoriaMenuPosicao.bottom === undefined ? undefined : `${categoriaMenuPosicao.bottom}px`
+                            }"
+                            @click.stop
+                          >
+                            <div
+                              class="overflow-y-auto p-2"
+                              :style="{ maxHeight: `${categoriaMenuPosicao.maxHeight}px` }"
                             >
-                              Selecione
-                            </button>
-                            <button
-                              v-for="categoria in categoriasOrdenadasPorUso"
-                              :key="categoria.codigo"
-                              type="button"
-                              class="flex w-full rounded-xl px-3 py-2.5 text-left text-sm leading-5 text-slate-200 transition hover:bg-white/[0.06]"
-                              :class="titulo.categoriaCodigo === categoria.codigo ? 'bg-emerald-400/10 text-emerald-200' : ''"
-                              @click="selecionarCategoria(titulo, categoria.codigo)"
-                            >
-                              <span class="flex w-full items-center justify-between gap-3">
-                                <span>{{ categoria.label }}</span>
-                                <span
-                                  v-if="categoria.frequencia"
-                                  class="shrink-0 text-xs text-slate-500"
-                                >
-                                  {{ categoria.frequencia }}x
+                              <button
+                                type="button"
+                                class="flex w-full rounded-xl px-3 py-2.5 text-left text-sm text-slate-200 transition hover:bg-white/[0.06]"
+                                @click="selecionarCategoria(titulo, null)"
+                              >
+                                Selecione
+                              </button>
+                              <button
+                                v-for="categoria in categoriasOrdenadasPorUso"
+                                :key="categoria.codigo"
+                                type="button"
+                                class="flex w-full rounded-xl px-3 py-2.5 text-left text-sm leading-5 text-slate-200 transition hover:bg-white/[0.06]"
+                                :class="titulo.categoriaCodigo === categoria.codigo ? 'bg-emerald-400/10 text-emerald-200' : ''"
+                                @click="selecionarCategoria(titulo, categoria.codigo)"
+                              >
+                                <span class="flex w-full items-center justify-between gap-3">
+                                  <span>{{ categoria.label }}</span>
+                                  <span
+                                    v-if="categoria.frequencia"
+                                    class="shrink-0 text-xs text-slate-500"
+                                  >
+                                    {{ categoria.frequencia }}x
+                                  </span>
                                 </span>
-                              </span>
-                            </button>
+                              </button>
+                            </div>
                           </div>
-                        </div>
+                        </Teleport>
                       </div>
                     </td>
                   </tr>
