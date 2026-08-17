@@ -63,6 +63,8 @@ const detalheEmEdicao = ref<{
   valor: string
 } | null>(null)
 const detalheSalvando = ref(false)
+const grupoRelatorioSelecionado = ref<RateioCategoriaCodigo | null>(null)
+const detalheRelatorioEl = ref<HTMLElement | null>(null)
 
 const competenciaFormatada = computed(() => competenciaFromInput(competenciaInput.value))
 
@@ -197,6 +199,23 @@ const gruposRelatorio = computed(() =>
     }
   }).filter((grupo) => grupo.itens.length > 0)
 )
+
+const grupoRelatorioDetalhe = computed(() =>
+  gruposRelatorio.value.find((grupo) => grupo.codigo === grupoRelatorioSelecionado.value) ?? null
+)
+
+function alternarGrupoRelatorio(codigo: RateioCategoriaCodigo) {
+  if (grupoRelatorioSelecionado.value === codigo) {
+    grupoRelatorioSelecionado.value = null
+    return
+  }
+
+  grupoRelatorioSelecionado.value = codigo
+
+  nextTick(() => {
+    detalheRelatorioEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
+}
 
 function sanitizeSearch(value: string) {
   return value
@@ -1824,7 +1843,7 @@ watch(totalPaginas, () => {
                 Consolidado por categoria
               </h2>
               <p class="max-w-2xl text-sm text-slate-300">
-                O resumo abaixo mostra a distribuicao das despesas e serve de base para a exportacao do PDF.
+                Clique em um destino para ver os titulos daquele grupo. O PDF continua saindo com o relatorio completo.
               </p>
             </div>
 
@@ -1850,10 +1869,15 @@ watch(totalPaginas, () => {
             class="grid gap-6"
           >
             <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              <article
+              <button
                 v-for="grupo in gruposRelatorio"
                 :key="grupo.codigo"
-                class="rounded-3xl border border-white/10 bg-white/[0.03] p-5"
+                type="button"
+                class="rounded-3xl border p-5 text-left transition"
+                :class="grupoRelatorioSelecionado === grupo.codigo
+                  ? 'border-emerald-400/60 bg-emerald-400/10 shadow-lg shadow-emerald-500/10'
+                  : 'border-white/10 bg-white/[0.03] hover:border-emerald-400/40 hover:bg-white/[0.06]'"
+                @click="alternarGrupoRelatorio(grupo.codigo)"
               >
                 <p class="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-300">
                   {{ grupo.label }}
@@ -1864,80 +1888,89 @@ watch(totalPaginas, () => {
                 <p class="mt-2 text-sm text-slate-400">
                   {{ grupo.itens.length }} titulo(s) classificados
                 </p>
-              </article>
+                <p class="mt-3 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200/70">
+                  {{ grupoRelatorioSelecionado === grupo.codigo ? 'Ocultar titulos' : 'Ver titulos' }}
+                </p>
+              </button>
             </div>
 
-            <div class="grid gap-5">
-              <article
-                v-for="grupo in gruposRelatorio"
-                :key="`${grupo.codigo}-detalhes`"
-                class="overflow-hidden rounded-3xl border border-white/10 bg-slate-900/75"
-              >
-                <div class="flex flex-col gap-3 border-b border-white/10 px-5 py-5 sm:flex-row sm:items-end sm:justify-between">
-                  <div>
-                    <p class="text-lg font-semibold text-white">
-                      {{ grupo.label }}
-                    </p>
-                    <p class="text-sm text-slate-400">
-                      {{ grupo.itens.length }} titulo(s) | {{ formatCurrencyBRL(grupo.total) }}
-                    </p>
-                  </div>
+            <article
+              v-if="grupoRelatorioDetalhe"
+              ref="detalheRelatorioEl"
+              class="overflow-hidden rounded-3xl border border-white/10 bg-slate-900/75"
+            >
+              <div class="flex flex-col gap-3 border-b border-white/10 px-5 py-5 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <p class="text-lg font-semibold text-white">
+                    {{ grupoRelatorioDetalhe.label }}
+                  </p>
+                  <p class="text-sm text-slate-400">
+                    {{ grupoRelatorioDetalhe.itens.length }} titulo(s) | {{ formatCurrencyBRL(grupoRelatorioDetalhe.total) }}
+                  </p>
                 </div>
 
-                <div class="overflow-x-auto">
-                  <table class="min-w-full text-left text-sm">
-                    <thead class="bg-slate-800/80 text-slate-300">
-                      <tr>
-                        <th class="px-4 py-3 font-medium">
-                          Fornecedor
-                        </th>
-                        <th class="px-4 py-3 font-medium">
-                          Historico
-                        </th>
-                        <th class="px-4 py-3 font-medium">
-                          Parcela
-                        </th>
-                        <th class="px-4 py-3 font-medium">
-                          Vencimento
-                        </th>
-                        <th class="px-4 py-3 font-medium">
-                          Pagamento
-                        </th>
-                        <th class="px-4 py-3 font-medium text-right">
-                          Valor pago
-                        </th>
-                      </tr>
-                    </thead>
+                <button
+                  type="button"
+                  class="inline-flex items-center justify-center self-start rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-semibold text-slate-200 transition hover:border-emerald-300/40 hover:text-white sm:self-auto"
+                  @click="grupoRelatorioSelecionado = null"
+                >
+                  Fechar
+                </button>
+              </div>
 
-                    <tbody class="divide-y divide-white/10">
-                      <tr
-                        v-for="titulo in grupo.itens"
-                        :key="`${grupo.codigo}-${titulo.id}`"
-                      >
-                        <td class="px-4 py-3 text-white">
-                          {{ normalizeText(titulo.fornecedor) }}
-                        </td>
-                        <td class="px-4 py-3 text-slate-300">
-                          {{ normalizeText(titulo.historico) }}
-                        </td>
-                        <td class="px-4 py-3 text-slate-300">
-                          {{ getParcela(titulo) }}
-                        </td>
-                        <td class="px-4 py-3 text-slate-300">
-                          {{ formatDateBR(titulo.data_vencimento) }}
-                        </td>
-                        <td class="px-4 py-3 text-slate-300">
-                          {{ formatDateBR(getDataPagamento(titulo)) }}
-                        </td>
-                        <td class="px-4 py-3 text-right font-semibold text-emerald-300">
-                          {{ formatCurrencyBRL(titulo.valor_pago) }}
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </article>
-            </div>
+              <div class="max-h-[70vh] overflow-auto">
+                <table class="min-w-full text-left text-sm">
+                  <thead class="sticky top-0 z-10 bg-slate-800 text-slate-300">
+                    <tr>
+                      <th class="px-4 py-3 font-medium">
+                        Fornecedor
+                      </th>
+                      <th class="px-4 py-3 font-medium">
+                        Historico
+                      </th>
+                      <th class="px-4 py-3 font-medium">
+                        Parcela
+                      </th>
+                      <th class="px-4 py-3 font-medium">
+                        Vencimento
+                      </th>
+                      <th class="px-4 py-3 font-medium">
+                        Pagamento
+                      </th>
+                      <th class="px-4 py-3 font-medium text-right">
+                        Valor pago
+                      </th>
+                    </tr>
+                  </thead>
+
+                  <tbody class="divide-y divide-white/10">
+                    <tr
+                      v-for="titulo in grupoRelatorioDetalhe.itens"
+                      :key="`${grupoRelatorioDetalhe.codigo}-${titulo.id}`"
+                    >
+                      <td class="px-4 py-3 text-white">
+                        {{ normalizeText(titulo.fornecedor) }}
+                      </td>
+                      <td class="px-4 py-3 text-slate-300">
+                        {{ normalizeText(titulo.historico) }}
+                      </td>
+                      <td class="px-4 py-3 text-slate-300">
+                        {{ getParcela(titulo) }}
+                      </td>
+                      <td class="px-4 py-3 text-slate-300">
+                        {{ formatDateBR(titulo.data_vencimento) }}
+                      </td>
+                      <td class="px-4 py-3 text-slate-300">
+                        {{ formatDateBR(getDataPagamento(titulo)) }}
+                      </td>
+                      <td class="px-4 py-3 text-right font-semibold text-emerald-300">
+                        {{ formatCurrencyBRL(titulo.valor_pago) }}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </article>
           </div>
         </div>
       </section>
