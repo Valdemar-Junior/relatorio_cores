@@ -40,6 +40,9 @@ export interface RateioHistoricoRow {
   historico: string | null
   observacao: string | null
   complemento: string | null
+  valor_pago?: number | null
+  data_baixa?: string | null
+  numero_titulo?: string | null
   categoria_codigo: RateioCategoriaCodigo
 }
 

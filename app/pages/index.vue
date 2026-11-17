@@ -817,6 +817,9 @@ async function salvarClassificacoes(titulosAlvo: TituloListItem[], mensagem: str
         historico: titulo.historico,
         observacao: titulo.observacao,
         complemento: titulo.complemento,
+        valor_pago: titulo.valor_pago,
+        data_baixa: titulo.data_baixa,
+        numero_titulo: titulo.numero_titulo,
         categoria_codigo: titulo.categoriaCodigo
       }))
 
@@ -1183,6 +1186,12 @@ watch(totalPaginas, () => {
             <p>2. Importe os titulos do ERP Solidus.</p>
             <p>3. Classifique cada titulo em um destino.</p>
             <p>4. Gere e baixe o relatorio final em PDF.</p>
+            <NuxtLink
+              to="/discrepancia"
+              class="mt-2 inline-flex items-center justify-center rounded-2xl border border-amber-400/30 bg-amber-400/15 px-4 py-2 font-semibold text-amber-100 transition hover:bg-amber-400/25"
+            >
+              Ver discrepancia mes a mes →
+            </NuxtLink>
           </div>
         </div>
       </section>
